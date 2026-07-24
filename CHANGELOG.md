@@ -7,6 +7,9 @@ Versioning and uses the Keep a Changelog format.
 
 ### Added
 
+- v0.6 Multi-Source Correlation with source groups, canonical mappings,
+  per-source timezone/manual clock correction, merged timelines, cross-source
+  search, and arbitrary canonical correlation keys.
 - v0.5 Structured Analysis with typed POST filters, indexed aggregations, safe
   derived fields, saved analyses, and table/bar/line result views.
 - v0.4 Extraction Studio with reusable parser profiles and immutable versions.

@@ -237,6 +237,52 @@ export interface SavedAnalysis {
   updatedAt: string;
 }
 
+export interface SourceGroupMember {
+  sourceGroupId: string;
+  sourceId: string;
+  sourceName: string;
+  timeZone: string;
+  manualClockOffsetMs: number;
+  addedAt: string;
+}
+
+export interface CanonicalFieldMapping {
+  id: string;
+  sourceGroupId: string;
+  sourceId: string;
+  canonicalName: string;
+  sourceField: string;
+  fieldType: FieldType;
+  createdAt: string;
+}
+
+export interface SourceGroup {
+  id: string;
+  name: string;
+  description?: string;
+  memberCount: number;
+  members?: SourceGroupMember[];
+  mappings?: CanonicalFieldMapping[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CorrelatedEntry {
+  sourceId: string;
+  sourceName: string;
+  originalTimestamp?: string;
+  correctedTimestamp?: string;
+  canonicalFields: Record<string, unknown>;
+  entry: LogEntry;
+}
+
+export interface GroupTimelinePoint {
+  timestamp: string;
+  count: number;
+  errors: number;
+  bySource: Record<string, number>;
+}
+
 interface APIErrorShape {
   error?: { message?: string };
 }
@@ -536,4 +582,102 @@ export function deleteSavedAnalysis(
   return request(`/sources/${sourceId}/analyses/${analysisId}`, {
     method: "DELETE",
   });
+}
+
+export async function listSourceGroups(): Promise<SourceGroup[]> {
+  const response = await request<{ items: SourceGroup[] }>("/source-groups/");
+  return response.items;
+}
+
+export function createSourceGroup(input: {
+  name: string;
+  description?: string;
+}): Promise<SourceGroup> {
+  return jsonRequest("/source-groups/", "POST", input);
+}
+
+export function getSourceGroup(groupId: string): Promise<SourceGroup> {
+  return request(`/source-groups/${groupId}`);
+}
+
+export function updateSourceGroup(
+  groupId: string,
+  input: { name: string; description?: string },
+): Promise<SourceGroup> {
+  return jsonRequest(`/source-groups/${groupId}`, "PUT", input);
+}
+
+export function deleteSourceGroup(groupId: string): Promise<void> {
+  return request(`/source-groups/${groupId}`, { method: "DELETE" });
+}
+
+export function upsertSourceGroupMember(
+  groupId: string,
+  sourceId: string,
+  input: { timeZone: string; manualClockOffsetMs: number },
+): Promise<SourceGroupMember> {
+  return jsonRequest(
+    `/source-groups/${groupId}/members/${sourceId}`,
+    "PUT",
+    input,
+  );
+}
+
+export function deleteSourceGroupMember(
+  groupId: string,
+  sourceId: string,
+): Promise<void> {
+  return request(`/source-groups/${groupId}/members/${sourceId}`, {
+    method: "DELETE",
+  });
+}
+
+export function upsertCanonicalMapping(
+  groupId: string,
+  input: {
+    sourceId: string;
+    canonicalName: string;
+    sourceField: string;
+  },
+): Promise<CanonicalFieldMapping> {
+  return jsonRequest(`/source-groups/${groupId}/mappings`, "POST", input);
+}
+
+export function deleteCanonicalMapping(
+  groupId: string,
+  mappingId: string,
+): Promise<void> {
+  return request(`/source-groups/${groupId}/mappings/${mappingId}`, {
+    method: "DELETE",
+  });
+}
+
+export function querySourceGroup(
+  groupId: string,
+  input: {
+    query?: string;
+    filters: TypedFilter[];
+    sourceIds?: string[];
+    sort?: "asc" | "desc";
+    limit?: number;
+  },
+): Promise<{ items: CorrelatedEntry[]; count: number }> {
+  return jsonRequest(`/source-groups/${groupId}/query`, "POST", input);
+}
+
+export async function getSourceGroupTimeline(
+  groupId: string,
+  bucketSeconds = 60,
+): Promise<GroupTimelinePoint[]> {
+  const response = await request<{ items: GroupTimelinePoint[] }>(
+    `/source-groups/${groupId}/timeline?bucketSeconds=${bucketSeconds}`,
+  );
+  return response.items;
+}
+
+export function correlateSourceGroup(
+  groupId: string,
+  input: { field: string; value: unknown; limit?: number },
+): Promise<{ items: CorrelatedEntry[]; count: number }> {
+  return jsonRequest(`/source-groups/${groupId}/correlations`, "POST", input);
 }

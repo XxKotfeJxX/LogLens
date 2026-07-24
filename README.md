@@ -15,8 +15,9 @@ Current product history is preserved:
 - v0.3 Live Tail
 - v0.4 Extraction Studio
 - v0.5 Structured Analysis
+- v0.6 Multi-Source Correlation
 
-v0.6 Multi-Source Correlation extends this foundation.
+The original large-file explorer remains the foundation for every level.
 
 ## Processing pipeline
 
@@ -74,6 +75,18 @@ open existing source
   conversion, and timestamp-duration functions.
 - Saved analysis configurations with table, bar, and line visualizations.
 - Non-indexed fields remain visible in JSON but are rejected as filter fields.
+
+## v0.6 Multi-Source Correlation
+
+- Source groups combine existing indexed sources without copying raw data.
+- Per-source IANA timezone reinterpretation and manual clock offsets produce a
+  corrected timestamp while preserving the original timestamp.
+- Canonical mappings normalize fields such as `request_id`, `requestId`,
+  `correlationId`, and `trace` into one investigation key.
+- Cross-source raw and structured search returns a deterministic merged event
+  sequence.
+- Merged timeline buckets retain per-source counts and error totals.
+- Correlation accepts any mapped canonical field, not only `request_id`.
 
 ## Quick start
 
@@ -183,6 +196,25 @@ GET    /api/v1/parser-profiles/{id}/derived-fields
 DELETE /api/v1/parser-profiles/{id}/derived-fields/{fieldId}
 ```
 
+Multi-Source Correlation:
+
+```text
+POST   /api/v1/source-groups/
+GET    /api/v1/source-groups/
+GET    /api/v1/source-groups/{id}
+PUT    /api/v1/source-groups/{id}
+DELETE /api/v1/source-groups/{id}
+
+PUT    /api/v1/source-groups/{id}/members/{sourceId}
+DELETE /api/v1/source-groups/{id}/members/{sourceId}
+POST   /api/v1/source-groups/{id}/mappings
+DELETE /api/v1/source-groups/{id}/mappings/{mappingId}
+
+POST   /api/v1/source-groups/{id}/query
+GET    /api/v1/source-groups/{id}/timeline
+POST   /api/v1/source-groups/{id}/correlations
+```
+
 Existing endpoints remain backward compatible. `GET /entries` supports the
 original filters plus `eventType`; v0.5 adds a separate typed POST query.
 
@@ -220,13 +252,12 @@ docker compose build
 Integration tests use real SQLite and cover legacy migration, immutable parser
 versions, preview isolation, typed extraction, offset-preserving reindex,
 semantic live entries, typed queries, aggregations, derived fields, and saved
-analyses.
+analyses. The v0.6 scenario additionally verifies two-source canonical
+correlation, timezone reinterpretation, manual offset correction, merged
+timeline counts, mapping cleanup, and group CRUD.
 
 ## Roadmap
 
-- v0.6 Multi-Source Correlation: source groups, canonical field mappings,
-  corrected merged timelines, cross-source search, and arbitrary correlation
-  keys.
 - v0.7 Patterns and Comparison.
 - v0.8 Product Hardening.
 - v1.0 Stable Self-Hosted Release.

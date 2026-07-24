@@ -305,3 +305,63 @@ type SavedAnalysis struct {
 	CreatedAt         time.Time      `json:"createdAt"`
 	UpdatedAt         time.Time      `json:"updatedAt"`
 }
+
+type SourceGroup struct {
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description,omitempty"`
+	MemberCount int                     `json:"memberCount"`
+	Members     []SourceGroupMember     `json:"members,omitempty"`
+	Mappings    []CanonicalFieldMapping `json:"mappings,omitempty"`
+	CreatedAt   time.Time               `json:"createdAt"`
+	UpdatedAt   time.Time               `json:"updatedAt"`
+}
+
+type SourceGroupMember struct {
+	SourceGroupID       string    `json:"sourceGroupId"`
+	SourceID            string    `json:"sourceId"`
+	SourceName          string    `json:"sourceName"`
+	TimeZone            string    `json:"timeZone"`
+	ManualClockOffsetMS int64     `json:"manualClockOffsetMs"`
+	AddedAt             time.Time `json:"addedAt"`
+}
+
+type CanonicalFieldMapping struct {
+	ID            string    `json:"id"`
+	SourceGroupID string    `json:"sourceGroupId"`
+	SourceID      string    `json:"sourceId"`
+	CanonicalName string    `json:"canonicalName"`
+	SourceField   string    `json:"sourceField"`
+	FieldType     FieldType `json:"fieldType"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type SourceGroupQuery struct {
+	Query     string        `json:"query,omitempty"`
+	Filters   []TypedFilter `json:"filters"`
+	SourceIDs []string      `json:"sourceIds,omitempty"`
+	Sort      string        `json:"sort,omitempty"`
+	Limit     int           `json:"limit"`
+}
+
+type CorrelatedEntry struct {
+	SourceID           string         `json:"sourceId"`
+	SourceName         string         `json:"sourceName"`
+	OriginalTimestamp  *time.Time     `json:"originalTimestamp,omitempty"`
+	CorrectedTimestamp *time.Time     `json:"correctedTimestamp,omitempty"`
+	CanonicalFields    map[string]any `json:"canonicalFields"`
+	Entry              Entry          `json:"entry"`
+}
+
+type GroupTimelinePoint struct {
+	Timestamp time.Time        `json:"timestamp"`
+	Count     int64            `json:"count"`
+	Errors    int64            `json:"errors"`
+	BySource  map[string]int64 `json:"bySource"`
+}
+
+type CorrelationRequest struct {
+	Field string `json:"field"`
+	Value any    `json:"value"`
+	Limit int    `json:"limit"`
+}
