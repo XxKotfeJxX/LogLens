@@ -379,6 +379,130 @@ func TestExtractionPreviewReindexAndLiveTail(t *testing.T) {
 	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/watch/stop", nil, http.StatusAccepted, nil)
 }
 
+func TestSourceGroupCanonicalCorrelationAndClockCorrection(t *testing.T) {
+	root := t.TempDir()
+	storage, err := store.Open(context.Background(), filepath.Join(root, "loglens.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	imports := importjob.NewManager(storage, 2, 1<<20)
+	sources := []domain.Source{
+		{
+			ID: "api-source", Name: "api.jsonl", OriginalName: "api.jsonl",
+			StoredPath: filepath.Join(root, "api.jsonl"), SourceType: "server_file",
+			Format: "jsonl", Status: "uploaded", CreatedAt: time.Now().UTC(),
+		},
+		{
+			ID: "worker-source", Name: "worker.jsonl", OriginalName: "worker.jsonl",
+			StoredPath: filepath.Join(root, "worker.jsonl"), SourceType: "server_file",
+			Format: "jsonl", Status: "uploaded", CreatedAt: time.Now().UTC(),
+		},
+	}
+	payloads := []string{
+		`{"timestamp":"2026-07-24T10:00:00Z","level":"INFO","service":"api","request_id":"trace-7","message":"request accepted"}` + "\n",
+		`{"timestamp":"2026-07-24T12:00:00Z","level":"ERROR","service":"worker","correlationId":"trace-7","message":"job failed"}` + "\n",
+	}
+	for index := range sources {
+		if err := os.WriteFile(sources[index].StoredPath, []byte(payloads[index]), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sources[index].SizeBytes = int64(len(payloads[index]))
+		if err := storage.CreateSource(context.Background(), sources[index]); err != nil {
+			t.Fatal(err)
+		}
+		job, err := imports.Start(context.Background(), sources[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitForImport(t, storage, job.ID)
+	}
+	server := httptest.NewServer(New(storage, imports, Config{
+		SourceStoragePath: filepath.Join(root, "sources"),
+		TempStoragePath:   filepath.Join(root, "temp"),
+		MaxUploadSize:     1 << 20,
+		MaxEntrySize:      1 << 20,
+	}))
+	defer server.Close()
+
+	var group domain.SourceGroup
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/source-groups/", map[string]any{
+		"name": "Incident trace", "description": "API and worker clocks",
+	}, http.StatusCreated, &group)
+	doJSON(t, http.MethodPut, server.URL+"/api/v1/source-groups/"+group.ID+"/members/api-source", map[string]any{
+		"timeZone": "UTC", "manualClockOffsetMs": 0,
+	}, http.StatusOK, nil)
+	doJSON(t, http.MethodPut, server.URL+"/api/v1/source-groups/"+group.ID+"/members/worker-source", map[string]any{
+		"timeZone": "Europe/Kyiv", "manualClockOffsetMs": 3600000,
+	}, http.StatusOK, nil)
+	for _, sourceID := range []string{"api-source", "worker-source"} {
+		doJSON(t, http.MethodPost, server.URL+"/api/v1/source-groups/"+group.ID+"/mappings", map[string]any{
+			"sourceId": sourceID, "canonicalName": "correlation_id", "sourceField": "request_id",
+		}, http.StatusOK, nil)
+	}
+
+	var query struct {
+		Items []domain.CorrelatedEntry `json:"items"`
+		Count int                      `json:"count"`
+	}
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/source-groups/"+group.ID+"/query", map[string]any{
+		"filters": []map[string]any{{"field": "correlation_id", "operator": "eq", "value": "trace-7"}},
+		"sort":    "asc", "limit": 20,
+	}, http.StatusOK, &query)
+	if query.Count != 2 {
+		t.Fatalf("cross-source query returned %+v", query)
+	}
+	wantCorrected := "2026-07-24T10:00:00Z"
+	for _, item := range query.Items {
+		if item.CorrectedTimestamp == nil || item.CorrectedTimestamp.Format(time.RFC3339) != wantCorrected {
+			t.Fatalf("corrected timestamp = %v, want %s", item.CorrectedTimestamp, wantCorrected)
+		}
+		if item.CanonicalFields["correlation_id"] != "trace-7" {
+			t.Fatalf("canonical mapping missing: %+v", item.CanonicalFields)
+		}
+	}
+
+	query.Items = nil
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/source-groups/"+group.ID+"/query", map[string]any{
+		"query": "job failed", "filters": []any{}, "limit": 20,
+	}, http.StatusOK, &query)
+	if query.Count != 1 || query.Items[0].SourceID != "worker-source" {
+		t.Fatalf("cross-source raw search returned %+v", query)
+	}
+
+	var timeline struct {
+		Items []domain.GroupTimelinePoint `json:"items"`
+	}
+	doJSON(t, http.MethodGet, server.URL+"/api/v1/source-groups/"+group.ID+"/timeline?bucketSeconds=60", nil, http.StatusOK, &timeline)
+	if len(timeline.Items) != 1 || timeline.Items[0].Count != 2 || timeline.Items[0].Errors != 1 {
+		t.Fatalf("merged timeline = %+v", timeline.Items)
+	}
+
+	var correlation struct {
+		Items []domain.CorrelatedEntry `json:"items"`
+		Count int                      `json:"count"`
+	}
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/source-groups/"+group.ID+"/correlations", map[string]any{
+		"field": "correlation_id", "value": "trace-7", "limit": 20,
+	}, http.StatusOK, &correlation)
+	if correlation.Count != 2 {
+		t.Fatalf("canonical correlation returned %+v", correlation)
+	}
+
+	doJSON(t, http.MethodPut, server.URL+"/api/v1/source-groups/"+group.ID, map[string]any{
+		"name": "Incident trace updated", "description": "Corrected clocks",
+	}, http.StatusOK, &group)
+	if group.Name != "Incident trace updated" {
+		t.Fatalf("group update failed: %+v", group)
+	}
+	doJSON(t, http.MethodDelete, server.URL+"/api/v1/source-groups/"+group.ID+"/members/worker-source", nil, http.StatusNoContent, nil)
+	doJSON(t, http.MethodGet, server.URL+"/api/v1/source-groups/"+group.ID, nil, http.StatusOK, &group)
+	if len(group.Members) != 1 || len(group.Mappings) != 1 {
+		t.Fatalf("member removal did not clean mappings: %+v", group)
+	}
+	doJSON(t, http.MethodDelete, server.URL+"/api/v1/source-groups/"+group.ID, nil, http.StatusNoContent, nil)
+}
+
 func doJSON(t *testing.T, method, url string, body any, expectedStatus int, target any) {
 	t.Helper()
 	var requestBody *bytes.Reader

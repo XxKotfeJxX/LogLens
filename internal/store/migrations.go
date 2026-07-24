@@ -183,6 +183,42 @@ CREATE INDEX IF NOT EXISTS idx_saved_analyses_source
 ON saved_analyses(source_id, updated_at);
 `
 
+const correlationSchema = `
+CREATE TABLE IF NOT EXISTS source_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_group_members (
+    source_group_id TEXT NOT NULL REFERENCES source_groups(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    time_zone TEXT NOT NULL DEFAULT 'UTC',
+    manual_clock_offset_ms INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY(source_group_id, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_group_members_source
+ON source_group_members(source_id);
+
+CREATE TABLE IF NOT EXISTS canonical_field_mappings (
+    id TEXT PRIMARY KEY,
+    source_group_id TEXT NOT NULL REFERENCES source_groups(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    canonical_name TEXT NOT NULL,
+    source_field TEXT NOT NULL,
+    field_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_group_id, source_id, canonical_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_canonical_mappings_group_name
+ON canonical_field_mappings(source_group_id, canonical_name);
+`
+
 func migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return err
@@ -216,6 +252,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, analysisSchema); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, correlationSchema); err != nil {
 		return err
 	}
 	return nil
