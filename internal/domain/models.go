@@ -7,6 +7,7 @@ type Source struct {
 	Name         string     `json:"name"`
 	OriginalName string     `json:"originalName"`
 	StoredPath   string     `json:"-"`
+	SourceType   string     `json:"sourceType"`
 	Format       string     `json:"format"`
 	Status       string     `json:"status"`
 	SizeBytes    int64      `json:"sizeBytes"`

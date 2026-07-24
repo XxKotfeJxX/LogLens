@@ -11,6 +11,7 @@ export interface Source {
   id: string;
   name: string;
   originalName: string;
+  sourceType: "uploaded_file" | "server_file" | "watched_file" | "remote_agent";
   format: "jsonl" | "plain_text";
   status: SourceStatus;
   sizeBytes: number;
@@ -45,7 +46,8 @@ export interface Detection {
 export interface ImportJob {
   id: string;
   sourceId: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  status:
+    "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
   bytesProcessed: number;
   totalBytes: number;
   entriesFound: number;
@@ -131,7 +133,9 @@ export async function uploadSource(
         resolve(xhr.response as { source: Source; detection: Detection });
       } else {
         const payload = xhr.response as APIErrorShape | null;
-        reject(new Error(payload?.error?.message ?? `Upload failed (${xhr.status})`));
+        reject(
+          new Error(payload?.error?.message ?? `Upload failed (${xhr.status})`),
+        );
       }
     };
     const body = new FormData();
@@ -161,7 +165,9 @@ export function getStatistics(sourceId: string): Promise<Statistics> {
 }
 
 export async function getTimeline(sourceId: string): Promise<TimelinePoint[]> {
-  const response = await request<{ items: TimelinePoint[] }>(`/sources/${sourceId}/timeline`);
+  const response = await request<{ items: TimelinePoint[] }>(
+    `/sources/${sourceId}/timeline`,
+  );
   return response.items;
 }
 
@@ -170,11 +176,18 @@ export function listEntries(
   cursor: number,
   filters: EntryFilters,
   limit = 200,
-): Promise<{ items: LogEntry[]; page: { nextCursor?: number; hasMore: boolean } }> {
-  const params = new URLSearchParams({ cursor: String(cursor), limit: String(limit) });
+): Promise<{
+  items: LogEntry[];
+  page: { nextCursor?: number; hasMore: boolean };
+}> {
+  const params = new URLSearchParams({
+    cursor: String(cursor),
+    limit: String(limit),
+  });
   if (filters.query) params.set("query", filters.query);
   if (filters.levels?.length) params.set("levels", filters.levels.join(","));
-  if (filters.services?.length) params.set("services", filters.services.join(","));
+  if (filters.services?.length)
+    params.set("services", filters.services.join(","));
   if (filters.requestId) params.set("requestId", filters.requestId);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
@@ -184,4 +197,3 @@ export function listEntries(
 export function importEventsURL(jobId: string): string {
   return `${API_ROOT}/imports/${jobId}/events`;
 }
-

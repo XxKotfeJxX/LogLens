@@ -1,0 +1,38 @@
+name: release-readiness
+
+on:
+  pull_request:
+    paths:
+      - "api/**"
+      - "scripts/**"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "web/Dockerfile"
+      - "web/Caddyfile"
+      - ".github/workflows/release-readiness.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render Compose configuration
+        run: docker compose config --quiet
+      - name: Build production images
+        run: docker compose build
+      - name: Start production stack
+        run: docker compose up -d --wait
+      - name: Verify public proxy and API readiness
+        run: |
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8088/)" = "200"
+          curl --fail --silent http://localhost:8088/readyz | jq --exit-status '.status == "ready"'
+      - name: Remove readiness services
+        if: always()
+        run: docker compose down --volumes
+

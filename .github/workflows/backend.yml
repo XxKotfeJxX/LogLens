@@ -1,0 +1,37 @@
+name: backend
+
+on:
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "api/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".github/workflows/backend.yml"
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l ./cmd ./internal ./scripts)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
+      - name: Build
+        run: go build ./cmd/loglens
+

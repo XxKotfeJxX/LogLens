@@ -1,13 +1,18 @@
 export function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const exponent = Math.min(
+    Math.floor(Math.log(value) / Math.log(1024)),
+    units.length - 1,
+  );
   const amount = value / 1024 ** exponent;
   return `${amount >= 100 || exponent === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[exponent]}`;
 }
 
 export function formatCount(value: number): string {
-  return new Intl.NumberFormat("en", { notation: value >= 100_000 ? "compact" : "standard" }).format(value);
+  return new Intl.NumberFormat("en", {
+    notation: value >= 100_000 ? "compact" : "standard",
+  }).format(value);
 }
 
 export function formatTimestamp(value?: string): string {
@@ -30,4 +35,3 @@ export function formatClock(value?: string): string {
   if (Number.isNaN(date.getTime())) return value;
   return date.toISOString().slice(11, 23);
 }
-
