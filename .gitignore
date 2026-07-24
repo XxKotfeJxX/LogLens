@@ -1,0 +1,9 @@
+storage/
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+.env
+*.log
+.idea/
+.vscode/
+.DS_Store

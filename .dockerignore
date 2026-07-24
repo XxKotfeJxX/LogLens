@@ -1,0 +1,8 @@
+.git
+.github
+storage
+web/node_modules
+web/dist
+samples
+*.log
+
