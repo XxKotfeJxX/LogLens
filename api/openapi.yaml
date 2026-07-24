@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: LogLens API
-  version: 0.5.0
-  description: Streaming large-log exploration, versioned extraction, and typed analysis.
+  version: 0.6.0
+  description: Streaming large-log exploration, versioned extraction, typed analysis, and multi-source correlation.
 servers:
   - url: http://localhost:8080
 paths:
@@ -645,6 +645,173 @@ paths:
       responses:
         "204":
           description: Derived field deleted
+  /api/v1/source-groups/:
+    get:
+      operationId: listSourceGroups
+      responses:
+        "200":
+          description: Source groups
+    post:
+      operationId: createSourceGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Source group created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceGroup"
+  /api/v1/source-groups/{groupId}:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+    get:
+      operationId: getSourceGroup
+      responses:
+        "200":
+          description: Group, members, and mappings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceGroup"
+    put:
+      operationId: updateSourceGroup
+      responses:
+        "200":
+          description: Group updated
+    delete:
+      operationId: deleteSourceGroup
+      responses:
+        "204":
+          description: Group deleted
+  /api/v1/source-groups/{groupId}/members/{sourceId}:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+      - $ref: "#/components/parameters/SourceId"
+    put:
+      operationId: upsertSourceGroupMember
+      summary: Add a source or update its clock correction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timeZone, manualClockOffsetMs]
+              properties:
+                timeZone:
+                  type: string
+                  examples: [Europe/Kyiv]
+                manualClockOffsetMs:
+                  type: integer
+      responses:
+        "200":
+          description: Membership saved
+    delete:
+      operationId: deleteSourceGroupMember
+      responses:
+        "204":
+          description: Member and its mappings deleted
+  /api/v1/source-groups/{groupId}/mappings:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+    post:
+      operationId: upsertCanonicalMapping
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, canonicalName, sourceField]
+              properties:
+                sourceId:
+                  type: string
+                canonicalName:
+                  type: string
+                  examples: [correlation_id]
+                sourceField:
+                  type: string
+                  examples: [requestId]
+      responses:
+        "200":
+          description: Canonical mapping saved
+  /api/v1/source-groups/{groupId}/mappings/{mappingId}:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+      - name: mappingId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteCanonicalMapping
+      responses:
+        "204":
+          description: Mapping deleted
+  /api/v1/source-groups/{groupId}/query:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+    post:
+      operationId: querySourceGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceGroupQuery"
+      responses:
+        "200":
+          description: Corrected merged entry window
+  /api/v1/source-groups/{groupId}/timeline:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+      - name: bucketSeconds
+        in: query
+        schema:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 60
+    get:
+      operationId: sourceGroupTimeline
+      responses:
+        "200":
+          description: Corrected merged timeline buckets
+  /api/v1/source-groups/{groupId}/correlations:
+    parameters:
+      - $ref: "#/components/parameters/GroupId"
+    post:
+      operationId: correlateSourceGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [field, value]
+              properties:
+                field:
+                  type: string
+                value: {}
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+      responses:
+        "200":
+          description: Entries sharing the canonical value
 components:
   parameters:
     SourceId:
@@ -663,6 +830,13 @@ components:
         format: uuid
     ProfileId:
       name: profileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GroupId:
+      name: groupId
       in: path
       required: true
       schema:
@@ -1165,6 +1339,108 @@ components:
               group: {}
               value:
                 type: number
+    SourceGroupMember:
+      type: object
+      required:
+        [
+          sourceGroupId,
+          sourceId,
+          sourceName,
+          timeZone,
+          manualClockOffsetMs,
+          addedAt,
+        ]
+      properties:
+        sourceGroupId:
+          type: string
+        sourceId:
+          type: string
+        sourceName:
+          type: string
+        timeZone:
+          type: string
+        manualClockOffsetMs:
+          type: integer
+        addedAt:
+          type: string
+          format: date-time
+    CanonicalFieldMapping:
+      type: object
+      required:
+        [
+          id,
+          sourceGroupId,
+          sourceId,
+          canonicalName,
+          sourceField,
+          fieldType,
+          createdAt,
+        ]
+      properties:
+        id:
+          type: string
+        sourceGroupId:
+          type: string
+        sourceId:
+          type: string
+        canonicalName:
+          type: string
+        sourceField:
+          type: string
+        fieldType:
+          type: string
+          enum: [string, integer, float, boolean, datetime, duration]
+        createdAt:
+          type: string
+          format: date-time
+    SourceGroup:
+      type: object
+      required: [id, name, memberCount, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        memberCount:
+          type: integer
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceGroupMember"
+        mappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/CanonicalFieldMapping"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SourceGroupQuery:
+      type: object
+      required: [filters]
+      properties:
+        query:
+          type: string
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypedFilter"
+        sourceIds:
+          type: array
+          items:
+            type: string
+        sort:
+          type: string
+          enum: [asc, desc]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
     Error:
       type: object
       required: [error]
