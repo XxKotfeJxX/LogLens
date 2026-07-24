@@ -7,6 +7,8 @@ Versioning and uses the Keep a Changelog format.
 
 ### Added
 
+- v0.5 Structured Analysis with typed POST filters, indexed aggregations, safe
+  derived fields, saved analyses, and table/bar/line result views.
 - v0.4 Extraction Studio with reusable parser profiles and immutable versions.
 - Priority-ordered regex, literal-pattern, key-value, and JSON semantic rules.
 - Typed dynamic fields, selective typed indexes, preview coverage, warnings,
