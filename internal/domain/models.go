@@ -248,3 +248,60 @@ type FieldStatistics struct {
 	TotalEntries   int64   `json:"totalEntries"`
 	Coverage       float64 `json:"coverage"`
 }
+
+type TypedFilter struct {
+	Field    string `json:"field"`
+	Operator string `json:"operator"`
+	Value    any    `json:"value"`
+}
+
+type QuerySort struct {
+	Field     string `json:"field"`
+	Direction string `json:"direction"`
+}
+
+type StructuredQuery struct {
+	Filters []TypedFilter `json:"filters"`
+	Sort    []QuerySort   `json:"sort"`
+	Limit   int           `json:"limit"`
+}
+
+type AggregationRequest struct {
+	Operation string        `json:"operation"`
+	Field     string        `json:"field,omitempty"`
+	GroupBy   string        `json:"groupBy,omitempty"`
+	Filters   []TypedFilter `json:"filters"`
+}
+
+type AggregationBucket struct {
+	Group any     `json:"group,omitempty"`
+	Value float64 `json:"value"`
+}
+
+type AggregationResult struct {
+	Operation string              `json:"operation"`
+	Field     string              `json:"field,omitempty"`
+	GroupBy   string              `json:"groupBy,omitempty"`
+	Buckets   []AggregationBucket `json:"buckets"`
+}
+
+type DerivedFieldDefinition struct {
+	ID              string    `json:"id"`
+	ParserProfileID string    `json:"parserProfileId"`
+	Name            string    `json:"name"`
+	ResultType      FieldType `json:"resultType"`
+	Expression      string    `json:"expression"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+type SavedAnalysis struct {
+	ID                string         `json:"id"`
+	Name              string         `json:"name"`
+	SourceID          string         `json:"sourceId,omitempty"`
+	SourceGroupID     string         `json:"sourceGroupId,omitempty"`
+	ConfigurationJSON string         `json:"-"`
+	Configuration     map[string]any `json:"configuration"`
+	ChartType         string         `json:"chartType"`
+	CreatedAt         time.Time      `json:"createdAt"`
+	UpdatedAt         time.Time      `json:"updatedAt"`
+}
