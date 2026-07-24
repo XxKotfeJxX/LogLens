@@ -14,7 +14,9 @@ describe("source library", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <QueryClientProvider client={client}>
         <MemoryRouter>
@@ -22,7 +24,11 @@ describe("source library", () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(screen.getByRole("heading", { name: /Investigate the record/i })).toBeInTheDocument();
-    expect(await screen.findByText(/No evidence on the tape yet/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Investigate the record/i }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No evidence on the tape yet/i),
+    ).toBeInTheDocument();
   });
 });

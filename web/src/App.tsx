@@ -4,7 +4,9 @@ import { AppShell } from "./components/AppShell";
 import { SourceLibrary } from "./pages/SourceLibrary";
 import { ImportProgress } from "./pages/ImportProgress";
 
-const Explorer = lazy(() => import("./pages/Explorer").then((module) => ({ default: module.Explorer })));
+const Explorer = lazy(() =>
+  import("./pages/Explorer").then((module) => ({ default: module.Explorer })),
+);
 
 export function App() {
   return (
@@ -14,7 +16,15 @@ export function App() {
         <Route path="/import/:jobId" element={<ImportProgress />} />
         <Route
           path="/sources/:sourceId"
-          element={<Suspense fallback={<div className="page loading-page">Opening indexed source…</div>}><Explorer /></Suspense>}
+          element={
+            <Suspense
+              fallback={
+                <div className="page loading-page">Opening indexed source…</div>
+              }
+            >
+              <Explorer />
+            </Suspense>
+          }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

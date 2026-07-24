@@ -7,11 +7,15 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-canvas text-ink">
       <header className="app-header">
         <Link to="/" className="brand" aria-label="LogLens home">
-          <span className="brand-mark"><ScanLine size={19} strokeWidth={1.8} /></span>
+          <span className="brand-mark">
+            <ScanLine size={19} strokeWidth={1.8} />
+          </span>
           <span>LogLens</span>
         </Link>
         <div className="header-meta">
-          <span className="system-ready"><Activity size={13} /> local index</span>
+          <span className="system-ready">
+            <Activity size={13} /> local index
+          </span>
           <a
             className="icon-link"
             href="https://github.com/"
@@ -27,4 +31,3 @@ export function AppShell({ children }: { children: ReactNode }) {
     </div>
   );
 }
-

@@ -1,4 +1,5 @@
 storage/
+.local/
 web/node_modules/
 web/dist/
 *.tsbuildinfo
