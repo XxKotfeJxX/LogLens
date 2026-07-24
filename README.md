@@ -1,223 +1,226 @@
 # LogLens
 
-**Explore multi-gigabyte log files without loading them into memory.**
+**Stream large logs, extract structured events, and investigate them without
+loading the whole file into memory.**
 
-LogLens is a local or self-hosted log explorer built with Go, React, TypeScript, and SQLite. It streams uploaded JSONL and plain-text logs, extracts common fields, stores byte offsets, and reads only the raw ranges needed by the current UI window.
+LogLens is a local or self-hosted log explorer built with Go, React,
+TypeScript, and SQLite. Raw files stay immutable. The index stores byte
+offsets, envelope metadata, semantic event types, and selected typed dynamic
+fields.
 
-> Current status: the repository implements the v0.1 vertical slice—upload, detection, streaming indexing, progress/cancellation, filters, statistics, timeline, raw inspection, virtual scrolling, Docker, and tests. Export jobs, custom plain-text regex mappings, multiline grouping, server-path import, and live tail remain roadmap items.
+Current product history is preserved:
 
-## Why it is different
+- v0.1 Core Explorer
+- v0.2 Search and Investigation
+- v0.3 Live Tail
+- v0.4 Extraction Studio
 
-A normal browser file viewer eventually turns the entire file into strings and DOM nodes. LogLens keeps the raw source immutable on disk. SQLite contains compact metadata used to find an entry:
+v0.5 Structured Analysis and v0.6 Multi-Source Correlation extend this
+foundation.
+
+## Processing pipeline
 
 ```text
-source_id · entry_number · byte_offset · byte_length
-timestamp · level · service · request_id · parse_status
+raw log file
+    → streaming reader
+    → record grouping
+    → envelope parser
+    → event recognition
+    → field extraction
+    → type conversion
+    → indexing
+    → search
+    → aggregation
+    → visualization
 ```
 
-The React application requests windows of 200 indexed records and renders only visible rows with TanStack Virtual.
+Envelope parsing finds common timestamp, level, service, request-ID, and
+message fields. Semantic extraction is separate and uses an immutable parser
+profile version. Changing a rule creates a new version; it never silently
+changes the meaning of previously indexed entries.
+
+## v0.4 Extraction Studio
+
+- Reusable parser profiles with immutable versions.
+- Priority-ordered regex, guided literal-pattern, key-value, and JSON rules.
+- Typed string, integer, float, boolean, datetime, and duration fields.
+- Preview of up to 500 entries with coverage, unmatched records, type errors,
+  and ambiguity warnings.
+- All extracted fields in JSON; only indexed or aggregatable fields receive
+  dedicated typed index rows.
+- Explicit source-to-parser assignment and cancellable batch reindex.
+- Raw offsets remain unchanged during reindex.
+- Existing sources migrate to raw mode without a forced reindex.
+- Live-tail entries keep the parser version assigned when the watcher starts.
+- Browser uploads and root-bound server-path imports.
+
+The first supported semantic workflow is:
+
+```text
+open existing source
+    → create an attack rule
+    → preview extraction
+    → assign parser version
+    → reindex
+    → filter event_type=attack
+    → inspect typed damage
+```
 
 ## Quick start
-
-Docker Compose is the shortest production-like path:
 
 ```bash
 docker compose up --build
 ```
 
-Open [http://localhost:8088](http://localhost:8088). The named `loglens-data` volume retains the SQLite database and managed raw files.
+Open [http://localhost:8088](http://localhost:8088). The `loglens-data` volume
+retains SQLite metadata and managed raw files.
 
 For local development:
 
 ```bash
 # terminal 1 — Go 1.26.5
-cp .env.example .env
 go run ./cmd/loglens
 
 # terminal 2 — Node 24 and pnpm 10
-cd web
-pnpm install
-pnpm dev
+pnpm --dir web install
+pnpm --dir web dev
 ```
 
-Vite proxies `/api`, `/healthz`, and `/readyz` to `localhost:8080`.
+## Bounded large-file design
 
-## How LogLens reads an 8 GB file with bounded memory
+The streaming reader retains at most `MAX_ENTRY_SIZE` bytes for one entry.
+Every entry receives a byte offset and length before a bounded batch is written
+to SQLite. Oversized entries remain addressable and are marked `oversized`.
 
-```text
-managed raw file
-      │
-      ▼
-bufio.Reader + bounded entry buffer
-      │  byte offset and byte length assigned here
-      ▼
-JSONL / plain-text parser
-      │  timestamp, level, service, request ID
-      ▼
-bounded in-process batch (default 2,000)
-      │
-      ▼
-single SQLite transaction
-```
+Entry retrieval:
 
-The line reader never retains more than `MAX_ENTRY_SIZE` bytes for one entry. An oversized line is still indexed with its complete byte range and an `oversized` parse status, while only its bounded preview is parsed or returned.
+1. selects compact metadata and typed indexes from SQLite;
+2. opens the raw source once per response;
+3. uses `ReadAt` only for the requested byte ranges;
+4. returns a bounded hydrated window;
+5. renders only visible rows with TanStack Virtual.
 
-SQLite uses WAL mode, a short busy timeout, indexed filter columns, and batch transactions. Restarted `queued` or `running` jobs become `interrupted`; their sources become `failed` and can be reindexed from zero.
-
-When entries are requested, the API:
-
-1. selects metadata using `(source_id, entry_number)` and field indexes;
-2. opens the immutable raw file once for the response;
-3. uses `ReadAt` on only the selected byte ranges;
-4. parses display fields and returns the requested window.
+Reindex repeats semantic extraction from existing offsets. It does not copy or
+modify the raw file.
 
 ## Supported input
 
-- Extensions: `.log`, `.txt`, `.jsonl`, `.ndjson`
-- Source types: managed browser uploads and root-bound server files
-- JSON aliases:
-  - timestamp: `timestamp`, `time`, `ts`, `datetime`, `date`, `@timestamp`
-  - level: `level`, `severity`, `log_level`, `logLevel`
-  - message: `message`, `msg`, `text`, `body`
-  - service: `service`, `service_name`, `serviceName`, `component`, `application`, `app`
-  - request ID: `request_id`, `requestId`, `trace_id`, `traceId`, `correlation_id`, `correlationId`
-- Plain text: generic timestamp–level–service–message records, with unstructured fallback
-- Newlines: LF, CRLF, and a final line without a newline
-- Normalized levels: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `UNKNOWN`
+- `.log`, `.txt`, `.jsonl`, and `.ndjson`
+- LF, CRLF, and a final non-live record without a newline
+- managed browser uploads
+- root-bound server files
+- watched server files
+- generic timestamp/level/service/message text
+- common JSON timestamp, level, message, service, and correlation aliases
 
-Format detection samples up to 100 non-empty records. JSONL requires at least 80% valid JSON objects and useful timestamp or message fields.
-
-## Explorer
-
-The “Forensic Tape” interface provides:
-
-- source history and status;
-- streaming upload progress;
-- format confidence and extracted field mapping;
-- live import progress over SSE;
-- import cancellation;
-- virtualized log rows;
-- level, service, request ID, time, and substring API filters;
-- adaptive timeline buckets;
-- level and service statistics;
-- a raw/parsed entry inspector;
-- source deletion with raw-file cleanup.
-
-Raw content is rendered only as text. The API strips ANSI escape sequences and unsafe control characters, and the frontend does not use `dangerouslySetInnerHTML`.
+Server imports accept only relative paths below `IMPORT_ROOT`. Absolute paths,
+traversal, symlinks, non-regular files, empty files, unsupported extensions,
+and over-limit files are rejected. Deleting a server source removes metadata
+and index rows, never the original file.
 
 ## API
 
-The OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Core endpoints:
+The OpenAPI 3.1 contract is in
+[`api/openapi.yaml`](api/openapi.yaml).
+
+Core explorer:
 
 ```text
 POST   /api/v1/sources/upload
 POST   /api/v1/sources/import
 GET    /api/v1/sources/
 GET    /api/v1/sources/{id}
-DELETE /api/v1/sources/{id}
-POST   /api/v1/sources/{id}/detect
 POST   /api/v1/sources/{id}/imports
-
-GET    /api/v1/imports/{id}
-POST   /api/v1/imports/{id}/cancel
-GET    /api/v1/imports/{id}/events
-
 GET    /api/v1/sources/{id}/entries
-GET    /api/v1/sources/{id}/entries/{number}
 GET    /api/v1/sources/{id}/entries/{number}/context
 GET    /api/v1/sources/{id}/statistics
 GET    /api/v1/sources/{id}/timeline
 ```
 
-Example entry window:
+Extraction Studio:
 
-```http
-GET /api/v1/sources/abc/entries?cursor=15000&limit=200&levels=ERROR,WARN&services=payment&query=timeout
+```text
+POST   /api/v1/parser-profiles/
+GET    /api/v1/parser-profiles/
+GET    /api/v1/parser-profiles/{id}
+POST   /api/v1/parser-profiles/{id}/versions
+GET    /api/v1/parser-profiles/{id}/versions
+POST   /api/v1/parser-profiles/{id}/preview
+
+PUT    /api/v1/sources/{id}/parser
+POST   /api/v1/sources/{id}/reindex
+GET    /api/v1/sources/{id}/reindex
+POST   /api/v1/sources/{id}/reindex/cancel
+GET    /api/v1/sources/{id}/fields
+GET    /api/v1/sources/{id}/event-types
+GET    /api/v1/sources/{id}/extraction-statistics
+
+POST   /api/v1/sources/{id}/watch
+POST   /api/v1/sources/{id}/watch/stop
+GET    /api/v1/sources/{id}/live/events
 ```
+
+Existing endpoints remain backward compatible. `GET /entries` supports the
+original filters plus `eventType`; v0.5 adds a separate typed POST query.
 
 ## Configuration
 
-All settings have safe local defaults. See [`.env.example`](.env.example).
-
 | Setting | Default | Purpose |
 |---|---:|---|
-| `DATABASE_PATH` | `./storage/loglens.db` | SQLite metadata database |
-| `SOURCE_STORAGE_PATH` | `./storage/sources` | Managed immutable raw files |
+| `DATABASE_PATH` | `./storage/loglens.db` | SQLite metadata |
+| `SOURCE_STORAGE_PATH` | `./storage/sources` | Managed raw files |
 | `TEMP_STORAGE_PATH` | `./storage/temp` | In-progress uploads |
-| `MAX_UPLOAD_SIZE` | `20GB` | Hard request/file limit |
-| `MAX_ENTRY_SIZE` | `4MB` | In-memory entry and response preview bound |
-| `IMPORT_BATCH_SIZE` | `2000` | SQLite rows per transaction |
+| `MAX_UPLOAD_SIZE` | `20GB` | Request and source limit |
+| `MAX_ENTRY_SIZE` | `4MB` | Per-entry memory bound |
+| `IMPORT_BATCH_SIZE` | `2000` | Import transaction size |
+| `IMPORT_ROOT` | `.` | Allowed server-import root |
+| `ALLOW_SERVER_IMPORT` | `false` | Enables server-path registration |
 | `WEB_ORIGIN` | `http://localhost:5173` | Development CORS origin |
-| `IMPORT_ROOT` | empty/disabled | Root directory for server-file imports |
-| `ALLOW_SERVER_IMPORT` | `false` | Enables root-bound relative-path imports |
 
-Server imports accept only a relative path below `IMPORT_ROOT`. Absolute paths,
-traversal, symlinks, non-regular files, unsupported extensions, empty files,
-and files above the configured size limit are rejected. Deleting a
-`server_file` removes its metadata and index but never deletes the original
-file.
-
-## Generate reproducible samples
+## Verification
 
 ```bash
-go run ./scripts/generate-sample.go \
-  --format jsonl \
-  --entries 10000000 \
-  --output ./samples/generated-10m.jsonl \
-  --error-rate 0.02 \
-  --malformed-rate 0.001 \
-  --seed 42
-```
-
-The generator produces deterministic timestamps, services, request IDs, malformed JSON, bursts of errors, stack-trace-like messages, and occasional large payloads. Use `--format plain` for generic plain text.
-
-## Tests and builds
-
-```bash
+go vet ./...
 go test ./...
 go test -race ./...
 
+pnpm --dir web lint
+pnpm --dir web format:check
+pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build
 
+docker compose config --quiet
 docker compose build
 ```
 
-The backend integration test exercises a real SQLite database and the entire HTTP path from multipart upload through import and filtered seek-based retrieval. CI runs formatting, the race detector, frontend tests, production builds, and both container builds.
-
-## Performance claims
-
-The design targets files up to 10 GB, up to 25 million entries, bounded import memory, sub-second indexed-source opening, and smooth virtual scrolling. These are **targets, not published results**. This README intentionally contains no invented throughput or latency numbers.
-
-Before publishing benchmark numbers, record:
-
-- machine model, CPU, RAM, and storage;
-- generator seed and dataset size;
-- import MB/s and entries/s;
-- peak resident memory;
-- SQLite database size;
-- entry-page and filter latency distributions.
+Integration tests use real SQLite and cover legacy migration, immutable parser
+versions, preview isolation, typed extraction, offset-preserving reindex, and
+semantic extraction of appended live entries.
 
 ## Roadmap
 
-- **v0.1 hardening:** multiline grouping, custom plain-text mappings, filtered export jobs, server-root imports, broader frontend tests, benchmark harness
-- **v0.2:** SQLite FTS5, saved queries, nearby-entry workflow, request-ID correlation
-- **v0.3:** watched directories and live tail
-- **v1.0:** stable self-hosted packaging and migration compatibility
+- v0.5 Structured Analysis: typed filters, aggregations, safe derived fields,
+  saved analyses, and charts.
+- v0.6 Multi-Source Correlation: source groups, canonical field mappings,
+  corrected merged timelines, cross-source search, and arbitrary correlation
+  keys.
+- v0.7 Patterns and Comparison.
+- v0.8 Product Hardening.
+- v1.0 Stable Self-Hosted Release.
 
-LogLens deliberately is not a replacement for Elasticsearch, Loki, a SIEM, distributed tracing, or a cloud observability platform.
+Performance values remain targets until a reproducible report records the
+dataset, machine, throughput, allocations, peak RSS, database size, and query
+latency.
 
 ## Git workflow
 
-- `main` contains deployable versions only.
-- `dev` is the integration and default development branch.
-- Feature branches start from `dev` using Conventional Commit prefixes and
-  return through pull requests.
-- Feature pull requests are squash-merged after backend, frontend, integration,
-  and release-readiness checks pass.
-- Releases move from `dev` to `main` through a dedicated release pull request.
+`dev` is the default integration branch and `main` contains deployable
+releases. Feature branches use Conventional Commits, GitHub issues and
+milestones, pull requests into `dev`, protected branches, and backend,
+frontend, integration, and release-readiness Actions.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete policy.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
