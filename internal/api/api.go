@@ -20,7 +20,9 @@ import (
 
 	"loglens/internal/domain"
 	"loglens/internal/importjob"
+	"loglens/internal/live"
 	"loglens/internal/parser"
+	"loglens/internal/reindex"
 	"loglens/internal/store"
 )
 
@@ -35,13 +37,30 @@ type Config struct {
 }
 
 type API struct {
-	store   *store.Store
-	imports *importjob.Manager
-	config  Config
+	store     *store.Store
+	imports   *importjob.Manager
+	reindexes *reindex.Manager
+	live      *live.Manager
+	config    Config
 }
 
-func New(storage *store.Store, imports *importjob.Manager, config Config) http.Handler {
-	api := &API{store: storage, imports: imports, config: config}
+type Dependencies struct {
+	Reindexes *reindex.Manager
+	Live      *live.Manager
+}
+
+func New(storage *store.Store, imports *importjob.Manager, config Config, dependencies ...Dependencies) http.Handler {
+	reindexes := reindex.NewManager(storage, 500, config.MaxEntrySize)
+	liveTail := live.NewManager(storage, config.MaxEntrySize, 250*time.Millisecond)
+	if len(dependencies) > 0 {
+		if dependencies[0].Reindexes != nil {
+			reindexes = dependencies[0].Reindexes
+		}
+		if dependencies[0].Live != nil {
+			liveTail = dependencies[0].Live
+		}
+	}
+	api := &API{store: storage, imports: imports, reindexes: reindexes, live: liveTail, config: config}
 	router := chi.NewRouter()
 	router.Use(api.recoverer, api.requestLogger, api.cors)
 	router.Get("/healthz", api.health)
@@ -60,12 +79,31 @@ func New(storage *store.Store, imports *importjob.Manager, config Config) http.H
 			router.Get("/{sourceID}/entries/{entryNumber}/context", api.getEntryContext)
 			router.Get("/{sourceID}/statistics", api.statistics)
 			router.Get("/{sourceID}/timeline", api.timeline)
+			router.Put("/{sourceID}/parser", api.assignSourceParser)
+			router.Post("/{sourceID}/reindex", api.startReindex)
+			router.Get("/{sourceID}/reindex", api.getSourceReindex)
+			router.Post("/{sourceID}/reindex/cancel", api.cancelSourceReindex)
+			router.Get("/{sourceID}/fields", api.sourceFields)
+			router.Get("/{sourceID}/event-types", api.sourceEventTypes)
+			router.Get("/{sourceID}/extraction-statistics", api.extractionStatistics)
+			router.Post("/{sourceID}/watch", api.startWatch)
+			router.Post("/{sourceID}/watch/stop", api.stopWatch)
+			router.Get("/{sourceID}/live/events", api.liveEvents)
 		})
 		router.Route("/imports", func(router chi.Router) {
 			router.Get("/{jobID}", api.getImport)
 			router.Post("/{jobID}/cancel", api.cancelImport)
 			router.Get("/{jobID}/events", api.importEvents)
 		})
+		router.Route("/parser-profiles", func(router chi.Router) {
+			router.Post("/", api.createParserProfile)
+			router.Get("/", api.listParserProfiles)
+			router.Get("/{profileID}", api.getParserProfile)
+			router.Post("/{profileID}/versions", api.createParserVersion)
+			router.Get("/{profileID}/versions", api.listParserVersions)
+			router.Post("/{profileID}/preview", api.previewParserProfile)
+		})
+		router.Get("/reindexes/{jobID}/events", api.reindexEvents)
 	})
 	return router
 }
@@ -166,7 +204,8 @@ func (api *API) uploadSource(w http.ResponseWriter, r *http.Request) {
 		source = domain.Source{
 			ID: id, Name: originalName, OriginalName: originalName, StoredPath: targetPath,
 			SourceType: "uploaded_file", Format: detection.Format, Status: "uploaded",
-			SizeBytes: written, CreatedAt: time.Now().UTC(),
+			SizeBytes: written, ExtractionStatus: "not_configured",
+			WatchStatus: "stopped", CreatedAt: time.Now().UTC(),
 		}
 		if err := api.store.CreateSource(r.Context(), source); err != nil {
 			_ = os.Remove(targetPath)
@@ -217,7 +256,8 @@ func (api *API) importServerSource(w http.ResponseWriter, r *http.Request) {
 	source := domain.Source{
 		ID: uuid.NewString(), Name: name, OriginalName: name, StoredPath: path,
 		SourceType: "server_file", Format: detection.Format, Status: "uploaded",
-		SizeBytes: info.Size(), CreatedAt: time.Now().UTC(),
+		SizeBytes: info.Size(), ExtractionStatus: "not_configured",
+		WatchStatus: "stopped", CreatedAt: time.Now().UTC(),
 	}
 	if err := api.store.CreateSource(r.Context(), source); err != nil {
 		writeInternal(w, err)
@@ -532,12 +572,17 @@ func (api *API) hydrateEntries(source domain.Source, metadata []domain.IndexedEn
 		if item.ParseStatus == "oversized" {
 			parsed.Message += " … [truncated]"
 		}
+		fields := item.CustomFields
+		if fields == nil {
+			fields = parsed.Fields
+		}
 		entries = append(entries, domain.Entry{
-			Number: item.Number, ByteOffset: item.ByteOffset, ByteLength: item.ByteLength,
+			SourceID: source.ID, Number: item.Number, ByteOffset: item.ByteOffset, ByteLength: item.ByteLength,
 			Timestamp: item.Timestamp, Level: item.Level, Service: item.Service,
 			RequestID: item.RequestID, Message: sanitizeText(parsed.Message),
 			ParseStatus: item.ParseStatus, Raw: sanitizeText(strings.TrimRight(string(raw), "\r\n")),
-			Fields: parsed.Fields,
+			Fields: fields, EventType: item.EventType, MatchedRuleID: item.MatchedRuleID,
+			ParserVersion: item.ParserVersion, WarningCount: item.WarningCount,
 		})
 	}
 	return entries, nil
@@ -553,6 +598,7 @@ func parseFilter(r *http.Request) (domain.EntryFilter, error) {
 		RequestID:   strings.TrimSpace(query.Get("requestId")),
 		Query:       strings.TrimSpace(query.Get("query")),
 		ParseStatus: splitCSV(query.Get("parseStatus")),
+		EventTypes:  splitCSV(query.Get("eventType")),
 	}
 	var err error
 	if value := query.Get("from"); value != "" {
@@ -598,7 +644,7 @@ func (api *API) cors(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

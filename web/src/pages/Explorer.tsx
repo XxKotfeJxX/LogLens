@@ -9,11 +9,13 @@ import {
   Filter,
   Hash,
   Search,
+  Settings2,
   X,
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import {
   getSource,
+  getExtractionStatistics,
   getStatistics,
   getTimeline,
   listEntries,
@@ -37,6 +39,7 @@ export function Explorer() {
   const [draftQuery, setDraftQuery] = useState("");
   const [draftLevel, setDraftLevel] = useState("");
   const [draftService, setDraftService] = useState("");
+  const [draftEventType, setDraftEventType] = useState("");
   const [filters, setFilters] = useState<EntryFilters>({});
   const [selected, setSelected] = useState<LogEntry | null>(null);
 
@@ -51,6 +54,11 @@ export function Explorer() {
   const timeline = useQuery({
     queryKey: ["timeline", sourceId],
     queryFn: () => getTimeline(sourceId),
+  });
+  const extraction = useQuery({
+    queryKey: ["extraction-statistics", sourceId],
+    queryFn: () => getExtractionStatistics(sourceId),
+    enabled: source.data?.extractionStatus !== "not_configured",
   });
   const entries = useInfiniteQuery({
     queryKey: ["entries", sourceId, filters],
@@ -94,6 +102,7 @@ export function Explorer() {
       query: draftQuery.trim() || undefined,
       levels: draftLevel ? [draftLevel] : undefined,
       services: draftService ? [draftService] : undefined,
+      eventTypes: draftEventType ? [draftEventType] : undefined,
     });
   }
 
@@ -101,11 +110,15 @@ export function Explorer() {
     setDraftQuery("");
     setDraftLevel("");
     setDraftService("");
+    setDraftEventType("");
     setFilters({});
   }
 
   const hasFilters = Boolean(
-    filters.query || filters.levels?.length || filters.services?.length,
+    filters.query ||
+    filters.levels?.length ||
+    filters.services?.length ||
+    filters.eventTypes?.length,
   );
 
   if (source.isLoading) {
@@ -139,6 +152,22 @@ export function Explorer() {
           </div>
           <div className="source-facts">
             <div>
+              <span>Parser</span>
+              <strong>
+                {source.data.parserVersion
+                  ? `v${source.data.parserVersion}`
+                  : "Raw mode"}
+              </strong>
+            </div>
+            <div>
+              <span>Extraction</span>
+              <strong>
+                {extraction.data
+                  ? `${(extraction.data.coverage * 100).toFixed(1)}%`
+                  : "—"}
+              </strong>
+            </div>
+            <div>
               <span>Entries</span>
               <strong>{formatCount(source.data.entryCount)}</strong>
             </div>
@@ -157,6 +186,13 @@ export function Explorer() {
                 %
               </strong>
             </div>
+            <Link
+              to={`/sources/${sourceId}/extraction`}
+              className="icon-button"
+              title="Extraction settings"
+            >
+              <Settings2 size={16} />
+            </Link>
           </div>
         </div>
 
@@ -179,6 +215,21 @@ export function Explorer() {
               {levels.map((level) => (
                 <option key={level}>{level}</option>
               ))}
+            </select>
+            <ChevronDown size={14} />
+          </label>
+          <label className="select-box">
+            <span>Event</span>
+            <select
+              value={draftEventType}
+              onChange={(event) => setDraftEventType(event.target.value)}
+            >
+              <option value="">All event types</option>
+              {Object.keys(extraction.data?.byEventType ?? {}).map(
+                (eventType) => (
+                  <option key={eventType}>{eventType}</option>
+                ),
+              )}
             </select>
             <ChevronDown size={14} />
           </label>
@@ -366,7 +417,7 @@ function EntryInspector({
   entry: LogEntry;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"raw" | "fields">("raw");
+  const [tab, setTab] = useState<"summary" | "raw" | "fields">("summary");
   return (
     <aside className="inspector">
       <div className="inspector-header">
@@ -405,6 +456,16 @@ function EntryInspector({
           <dd className="mono">{entry.requestId || "—"}</dd>
         </div>
         <div>
+          <dt>Event type</dt>
+          <dd>{entry.eventType || "Unmatched"}</dd>
+        </div>
+        <div>
+          <dt>Parser version</dt>
+          <dd>
+            {entry.parserVersion ? `v${entry.parserVersion}` : "Raw mode"}
+          </dd>
+        </div>
+        <div>
           <dt>Byte range</dt>
           <dd className="mono">
             {entry.byteOffset.toLocaleString()} +{" "}
@@ -418,19 +479,33 @@ function EntryInspector({
       </dl>
       <div className="inspector-tabs">
         <button
-          className={tab === "raw" ? "active" : ""}
-          onClick={() => setTab("raw")}
+          className={tab === "summary" ? "active" : ""}
+          onClick={() => setTab("summary")}
         >
-          <Hash size={14} /> Raw
+          Summary
         </button>
         <button
           className={tab === "fields" ? "active" : ""}
           onClick={() => setTab("fields")}
         >
-          <Braces size={14} /> Fields
+          <Braces size={14} /> Extracted fields
+        </button>
+        <button
+          className={tab === "raw" ? "active" : ""}
+          onClick={() => setTab("raw")}
+        >
+          <Hash size={14} /> Raw
         </button>
       </div>
-      {tab === "raw" ? (
+      {tab === "summary" ? (
+        <div className="inspector-summary">
+          <strong>{entry.eventType || entry.level}</strong>
+          <p>{entry.message}</p>
+          {entry.warningCount ? (
+            <span>{entry.warningCount} extraction warning(s)</span>
+          ) : null}
+        </div>
+      ) : tab === "raw" ? (
         <pre className="raw-block">{entry.raw}</pre>
       ) : (
         <pre className="raw-block">

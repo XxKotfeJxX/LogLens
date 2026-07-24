@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Github, ScanLine } from "lucide-react";
+import { Activity, Braces, Github, ScanLine } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -12,13 +12,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
           <span>LogLens</span>
         </Link>
+        <nav className="app-nav" aria-label="Primary">
+          <Link to="/">Sources</Link>
+          <Link to="/parsers">
+            <Braces size={14} /> Parsers
+          </Link>
+        </nav>
         <div className="header-meta">
           <span className="system-ready">
             <Activity size={13} /> local index
           </span>
           <a
             className="icon-link"
-            href="https://github.com/"
+            href="https://github.com/XxKotfeJxX/LogLens"
             aria-label="GitHub repository"
             target="_blank"
             rel="noreferrer"

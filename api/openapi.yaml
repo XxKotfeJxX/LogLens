@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: LogLens API
-  version: 0.1.0
-  description: Streaming import and seek-based exploration of large log files.
+  version: 0.4.0
+  description: Streaming large-log exploration with versioned structured-event extraction.
 servers:
   - url: http://localhost:8080
 paths:
@@ -230,6 +230,11 @@ paths:
         description: Case-insensitive substring filter applied to raw entries
         schema:
           type: string
+      - name: eventType
+        in: query
+        description: Comma-separated semantic event types
+        schema:
+          type: string
       - name: from
         in: query
         schema:
@@ -317,8 +322,225 @@ paths:
                 properties:
                   items:
                     type: array
+                  items:
+                    $ref: "#/components/schemas/TimelinePoint"
+  /api/v1/parser-profiles/:
+    get:
+      operationId: listParserProfiles
+      responses:
+        "200":
+          description: Parser profile library
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
                     items:
-                      $ref: "#/components/schemas/TimelinePoint"
+                      $ref: "#/components/schemas/ParserProfile"
+    post:
+      operationId: createParserProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Profile created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParserProfile"
+  /api/v1/parser-profiles/{profileId}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    get:
+      operationId: getParserProfile
+      responses:
+        "200":
+          description: Profile and immutable version history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    $ref: "#/components/schemas/ParserProfile"
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ParserProfileVersion"
+  /api/v1/parser-profiles/{profileId}/versions:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    get:
+      operationId: listParserVersions
+      responses:
+        "200":
+          description: Immutable versions newest first
+    post:
+      operationId: createParserVersion
+      summary: Create a new immutable parser profile version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateParserVersion"
+      responses:
+        "201":
+          description: Version created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParserProfileVersion"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/v1/parser-profiles/{profileId}/preview:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    post:
+      operationId: previewParserProfile
+      summary: Preview extraction without changing the source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId]
+              properties:
+                sourceId:
+                  type: string
+                version:
+                  type: integer
+                limit:
+                  type: integer
+                  maximum: 1000
+      responses:
+        "200":
+          description: Coverage, type errors, and entry-level extraction preview
+  /api/v1/sources/{sourceId}/parser:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    put:
+      operationId: assignSourceParser
+      summary: Pin a source to an immutable parser version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profileId, version]
+              properties:
+                profileId:
+                  type: string
+                version:
+                  type: integer
+                  minimum: 1
+      responses:
+        "200":
+          description: Updated source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+  /api/v1/sources/{sourceId}/reindex:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: startExtractionReindex
+      responses:
+        "202":
+          description: Reindex queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReindexJob"
+    get:
+      operationId: getExtractionReindex
+      responses:
+        "200":
+          description: Latest reindex state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReindexJob"
+  /api/v1/sources/{sourceId}/reindex/cancel:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: cancelExtractionReindex
+      responses:
+        "202":
+          description: Cancellation requested
+  /api/v1/sources/{sourceId}/fields:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      operationId: listSourceFields
+      responses:
+        "200":
+          description: Field definitions and extraction coverage
+  /api/v1/sources/{sourceId}/event-types:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      operationId: listSourceEventTypes
+      responses:
+        "200":
+          description: Event type counts
+  /api/v1/sources/{sourceId}/extraction-statistics:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      operationId: getExtractionStatistics
+      responses:
+        "200":
+          description: Extraction coverage and warnings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractionStatistics"
+  /api/v1/sources/{sourceId}/watch:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: startLiveTail
+      responses:
+        "202":
+          description: File watcher started with the assigned parser version
+  /api/v1/sources/{sourceId}/watch/stop:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: stopLiveTail
+      responses:
+        "202":
+          description: File watcher stopped
+  /api/v1/sources/{sourceId}/live/events:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      operationId: streamLiveEntries
+      responses:
+        "200":
+          description: SSE live entries, rotation, lag, and backpressure state
+          content:
+            text/event-stream:
+              schema:
+                type: string
 components:
   parameters:
     SourceId:
@@ -330,6 +552,13 @@ components:
         format: uuid
     JobId:
       name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProfileId:
+      name: profileId
       in: path
       required: true
       schema:
@@ -358,7 +587,7 @@ components:
           type: string
     Source:
       type: object
-      required: [id, name, originalName, sourceType, format, status, sizeBytes, entryCount, parsedCount, failedCount, createdAt]
+      required: [id, name, originalName, sourceType, format, status, sizeBytes, entryCount, parsedCount, failedCount, extractionStatus, reindexRequired, watchStatus, watchOffset, rotationGeneration, createdAt]
       properties:
         id:
           type: string
@@ -383,6 +612,25 @@ components:
         parsedCount:
           type: integer
         failedCount:
+          type: integer
+        parserProfileId:
+          type: string
+          format: uuid
+        parserVersion:
+          type: integer
+        extractionStatus:
+          type: string
+          enum: [not_configured, configured, indexing, ready, partial, failed]
+        reindexRequired:
+          type: boolean
+        watchStatus:
+          type: string
+          enum: [stopped, running, failed]
+        watchOffset:
+          type: integer
+        fileIdentity:
+          type: string
+        rotationGeneration:
           type: integer
         createdAt:
           type: string
@@ -470,6 +718,14 @@ components:
         fields:
           type: object
           additionalProperties: true
+        eventType:
+          type: string
+        matchedRuleId:
+          type: string
+        parserVersion:
+          type: integer
+        warningCount:
+          type: integer
     EntryPage:
       type: object
       required: [items, page]
@@ -521,6 +777,155 @@ components:
           type: integer
         errors:
           type: integer
+    ParserProfile:
+      type: object
+      required: [id, name, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    FieldDefinition:
+      type: object
+      required: [id, name, fieldType, indexed, aggregatable, nullable]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        fieldType:
+          type: string
+          enum: [string, integer, float, boolean, datetime, duration]
+        indexed:
+          type: boolean
+        aggregatable:
+          type: boolean
+        nullable:
+          type: boolean
+    ExtractionRule:
+      type: object
+      required: [id, name, eventType, priority, matcherType, matcherConfig, enabled]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        eventType:
+          type: string
+        priority:
+          type: integer
+        matcherType:
+          type: string
+          enum: [regex, key_value, json, literal_pattern]
+        matcherConfig:
+          type: object
+          additionalProperties: true
+        enabled:
+          type: boolean
+    ParserProfileVersion:
+      type: object
+      required: [id, profileId, version, recordFormat, configuration, createdAt, rules, fields]
+      properties:
+        id:
+          type: string
+        profileId:
+          type: string
+        version:
+          type: integer
+        recordFormat:
+          type: string
+          enum: [plain_text, jsonl]
+        configuration:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtractionRule"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldDefinition"
+    CreateParserVersion:
+      type: object
+      required: [recordFormat, rules, fields]
+      additionalProperties: false
+      properties:
+        recordFormat:
+          type: string
+          enum: [plain_text, jsonl]
+        configuration:
+          type: object
+          additionalProperties: true
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtractionRule"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldDefinition"
+    ReindexJob:
+      type: object
+      required: [id, sourceId, parserVersionId, status, entriesProcessed, totalEntries, warnings]
+      properties:
+        id:
+          type: string
+        sourceId:
+          type: string
+        parserVersionId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled, interrupted]
+        entriesProcessed:
+          type: integer
+        totalEntries:
+          type: integer
+        warnings:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        errorMessage:
+          type: string
+    ExtractionStatistics:
+      type: object
+      required: [totalEntries, matchedEntries, unmatchedEntries, warningEntries, coverage, byEventType]
+      properties:
+        totalEntries:
+          type: integer
+        matchedEntries:
+          type: integer
+        unmatchedEntries:
+          type: integer
+        warningEntries:
+          type: integer
+        coverage:
+          type: number
+          minimum: 0
+          maximum: 1
+        byEventType:
+          type: object
+          additionalProperties:
+            type: integer
     Error:
       type: object
       required: [error]

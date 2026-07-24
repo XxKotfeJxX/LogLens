@@ -11,6 +11,8 @@ import (
 
 	"loglens/internal/api"
 	"loglens/internal/importjob"
+	"loglens/internal/live"
+	"loglens/internal/reindex"
 	"loglens/internal/store"
 )
 
@@ -38,14 +40,22 @@ func Run(ctx context.Context) error {
 	if err := storage.InterruptRunningJobs(ctx); err != nil {
 		return fmt.Errorf("recover interrupted jobs: %w", err)
 	}
+	if err := storage.InterruptRunningReindexes(ctx); err != nil {
+		return fmt.Errorf("recover interrupted reindexes: %w", err)
+	}
 
 	imports := importjob.NewManager(storage, config.ImportBatchSize, config.MaxEntrySize)
+	reindexes := reindex.NewManager(storage, config.ImportBatchSize, config.MaxEntrySize)
+	liveTail := live.NewManager(storage, config.MaxEntrySize, 250*time.Millisecond)
+	if err := liveTail.Resume(ctx); err != nil {
+		return fmt.Errorf("resume watched sources: %w", err)
+	}
 	handler := api.New(storage, imports, api.Config{
 		WebOrigin: config.WebOrigin, SourceStoragePath: config.SourceStoragePath,
 		TempStoragePath: config.TempStoragePath, MaxUploadSize: config.MaxUploadSize,
 		MaxEntrySize: config.MaxEntrySize, ImportRoot: config.ImportRoot,
 		AllowServerImport: config.AllowServerImport,
-	})
+	}, api.Dependencies{Reindexes: reindexes, Live: liveTail})
 	server := &http.Server{
 		Addr: config.Address(), Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
