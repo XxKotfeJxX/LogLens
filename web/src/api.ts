@@ -188,6 +188,55 @@ export interface FieldStatistics extends FieldDefinition {
   coverage: number;
 }
 
+export interface TypedFilter {
+  field: string;
+  operator:
+    "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "between" | "contains";
+  value: unknown;
+}
+
+export interface StructuredQuery {
+  filters: TypedFilter[];
+  sort?: Array<{
+    field: "timestamp" | "entry_number";
+    direction: "asc" | "desc";
+  }>;
+  limit?: number;
+}
+
+export interface AggregationRequest {
+  operation: "count" | "sum" | "avg" | "min" | "max";
+  field?: string;
+  groupBy?: string;
+  filters: TypedFilter[];
+}
+
+export interface AggregationResult {
+  operation: string;
+  field?: string;
+  groupBy?: string;
+  buckets: Array<{ group?: unknown; value: number }>;
+}
+
+export interface DerivedField {
+  id: string;
+  parserProfileId: string;
+  name: string;
+  resultType: FieldType;
+  expression: string;
+  createdAt: string;
+}
+
+export interface SavedAnalysis {
+  id: string;
+  name: string;
+  sourceId: string;
+  configuration: Record<string, unknown>;
+  chartType: "table" | "bar" | "line";
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface APIErrorShape {
   error?: { message?: string };
 }
@@ -419,4 +468,72 @@ export function getExtractionStatistics(
   sourceId: string,
 ): Promise<ExtractionStatistics> {
   return request(`/sources/${sourceId}/extraction-statistics`);
+}
+
+export function querySource(
+  sourceId: string,
+  query: StructuredQuery,
+): Promise<{ items: LogEntry[]; count: number }> {
+  return jsonRequest(`/sources/${sourceId}/query`, "POST", query);
+}
+
+export function aggregateSource(
+  sourceId: string,
+  aggregation: AggregationRequest,
+): Promise<AggregationResult> {
+  return jsonRequest(`/sources/${sourceId}/aggregations`, "POST", aggregation);
+}
+
+export async function listDerivedFields(
+  profileId: string,
+): Promise<DerivedField[]> {
+  const response = await request<{ items: DerivedField[] }>(
+    `/parser-profiles/${profileId}/derived-fields`,
+  );
+  return response.items;
+}
+
+export function createDerivedField(
+  profileId: string,
+  field: Pick<DerivedField, "name" | "resultType" | "expression">,
+): Promise<DerivedField> {
+  return jsonRequest(
+    `/parser-profiles/${profileId}/derived-fields`,
+    "POST",
+    field,
+  );
+}
+
+export function deleteDerivedField(
+  profileId: string,
+  fieldId: string,
+): Promise<void> {
+  return request(`/parser-profiles/${profileId}/derived-fields/${fieldId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listSavedAnalyses(
+  sourceId: string,
+): Promise<SavedAnalysis[]> {
+  const response = await request<{ items: SavedAnalysis[] }>(
+    `/sources/${sourceId}/analyses`,
+  );
+  return response.items;
+}
+
+export function createSavedAnalysis(
+  sourceId: string,
+  analysis: Pick<SavedAnalysis, "name" | "configuration" | "chartType">,
+): Promise<SavedAnalysis> {
+  return jsonRequest(`/sources/${sourceId}/analyses`, "POST", analysis);
+}
+
+export function deleteSavedAnalysis(
+  sourceId: string,
+  analysisId: string,
+): Promise<void> {
+  return request(`/sources/${sourceId}/analyses/${analysisId}`, {
+    method: "DELETE",
+  });
 }

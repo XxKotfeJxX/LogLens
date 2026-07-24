@@ -10,6 +10,9 @@ import { SourceExtraction } from "./pages/SourceExtraction";
 const Explorer = lazy(() =>
   import("./pages/Explorer").then((module) => ({ default: module.Explorer })),
 );
+const Analyze = lazy(() =>
+  import("./pages/Analyze").then((module) => ({ default: module.Analyze })),
+);
 
 export function App() {
   return (
@@ -22,6 +25,20 @@ export function App() {
         <Route
           path="/sources/:sourceId/extraction"
           element={<SourceExtraction />}
+        />
+        <Route
+          path="/sources/:sourceId/analyze"
+          element={
+            <Suspense
+              fallback={
+                <div className="page loading-page">
+                  Opening analysis workspace…
+                </div>
+              }
+            >
+              <Analyze />
+            </Suspense>
+          }
         />
         <Route
           path="/sources/:sourceId"
