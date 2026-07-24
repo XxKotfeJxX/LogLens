@@ -35,6 +35,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err := ensureSourceTypeColumn(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate source type: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -47,17 +51,17 @@ func (s *Store) Ready(ctx context.Context) error {
 func (s *Store) CreateSource(ctx context.Context, source domain.Source) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sources (
-			id, name, original_name, stored_path, format, status, size_bytes, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, name, original_name, stored_path, source_type, format, status, size_bytes, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		source.ID, source.Name, source.OriginalName, source.StoredPath,
-		source.Format, source.Status, source.SizeBytes, source.CreatedAt.Format(time.RFC3339Nano),
+		source.SourceType, source.Format, source.Status, source.SizeBytes, source.CreatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
 
 func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, original_name, stored_path, format, status, size_bytes,
+		SELECT id, name, original_name, stored_path, source_type, format, status, size_bytes,
 		       entry_count, parsed_count, failed_count, created_at, imported_at
 		FROM sources WHERE status <> 'deleted' ORDER BY created_at DESC`)
 	if err != nil {
@@ -78,7 +82,7 @@ func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
 
 func (s *Store) GetSource(ctx context.Context, id string) (domain.Source, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, original_name, stored_path, format, status, size_bytes,
+		SELECT id, name, original_name, stored_path, source_type, format, status, size_bytes,
 		       entry_count, parsed_count, failed_count, created_at, imported_at
 		FROM sources WHERE id = ? AND status <> 'deleted'`, id)
 	source, err := scanSource(row)
@@ -437,7 +441,7 @@ func scanSource(scanner interface{ Scan(...any) error }) (domain.Source, error) 
 	var created string
 	var imported sql.NullString
 	err := scanner.Scan(&source.ID, &source.Name, &source.OriginalName, &source.StoredPath,
-		&source.Format, &source.Status, &source.SizeBytes, &source.EntryCount,
+		&source.SourceType, &source.Format, &source.Status, &source.SizeBytes, &source.EntryCount,
 		&source.ParsedCount, &source.FailedCount, &created, &imported)
 	if err != nil {
 		return domain.Source{}, err
@@ -448,6 +452,40 @@ func scanSource(scanner interface{ Scan(...any) error }) (domain.Source, error) 
 	}
 	source.ImportedAt = parseNullableTime(imported)
 	return source, nil
+}
+
+func ensureSourceTypeColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(sources)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "source_type" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `
+		ALTER TABLE sources
+		ADD COLUMN source_type TEXT NOT NULL DEFAULT 'uploaded_file'`)
+	return err
 }
 
 func parseNullableTime(value sql.NullString) *time.Time {

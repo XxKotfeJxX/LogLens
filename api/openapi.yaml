@@ -62,6 +62,39 @@ paths:
           $ref: "#/components/responses/Error"
         "415":
           $ref: "#/components/responses/Error"
+  /api/v1/sources/import:
+    post:
+      operationId: importServerSource
+      summary: Register a regular file below the configured IMPORT_ROOT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [relativePath]
+              additionalProperties: false
+              properties:
+                relativePath:
+                  type: string
+                  examples: ["services/api.jsonl"]
+      responses:
+        "201":
+          description: Server source registered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, detection]
+                properties:
+                  source:
+                    $ref: "#/components/schemas/Source"
+                  detection:
+                    $ref: "#/components/schemas/Detection"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/v1/sources/:
     get:
       operationId: listSources
@@ -325,7 +358,7 @@ components:
           type: string
     Source:
       type: object
-      required: [id, name, originalName, format, status, sizeBytes, entryCount, parsedCount, failedCount, createdAt]
+      required: [id, name, originalName, sourceType, format, status, sizeBytes, entryCount, parsedCount, failedCount, createdAt]
       properties:
         id:
           type: string
@@ -334,6 +367,9 @@ components:
           type: string
         originalName:
           type: string
+        sourceType:
+          type: string
+          enum: [uploaded_file, server_file, watched_file, remote_agent]
         format:
           type: string
           enum: [jsonl, plain_text]
@@ -497,4 +533,3 @@ components:
               type: string
             message:
               type: string
-

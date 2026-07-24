@@ -43,7 +43,8 @@ func Run(ctx context.Context) error {
 	handler := api.New(storage, imports, api.Config{
 		WebOrigin: config.WebOrigin, SourceStoragePath: config.SourceStoragePath,
 		TempStoragePath: config.TempStoragePath, MaxUploadSize: config.MaxUploadSize,
-		MaxEntrySize: config.MaxEntrySize,
+		MaxEntrySize: config.MaxEntrySize, ImportRoot: config.ImportRoot,
+		AllowServerImport: config.AllowServerImport,
 	})
 	server := &http.Server{
 		Addr: config.Address(), Handler: handler,

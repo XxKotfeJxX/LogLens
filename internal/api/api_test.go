@@ -8,7 +8,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,5 +113,77 @@ func TestUploadImportAndReadEntries(t *testing.T) {
 	response.Body.Close()
 	if len(entries.Items) != 1 || entries.Items[0].RequestID != "req-1" || entries.Items[0].Message != "timeout" {
 		t.Fatalf("unexpected entries: %+v", entries.Items)
+	}
+}
+
+func TestServerImportIsRootBoundAndDoesNotDeleteOriginal(t *testing.T) {
+	root := t.TempDir()
+	importRoot := filepath.Join(root, "allowed")
+	if err := os.MkdirAll(importRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(importRoot, "service.jsonl")
+	if err := os.WriteFile(sourcePath, []byte("{\"timestamp\":\"2026-07-24T10:15:43Z\",\"message\":\"ready\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := store.Open(context.Background(), filepath.Join(root, "loglens.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	manager := importjob.NewManager(storage, 2, 1<<20)
+	server := httptest.NewServer(New(storage, manager, Config{
+		SourceStoragePath: filepath.Join(root, "sources"),
+		TempStoragePath:   filepath.Join(root, "temp"),
+		ImportRoot:        importRoot,
+		AllowServerImport: true,
+		MaxUploadSize:     1 << 20,
+		MaxEntrySize:      1 << 20,
+	}))
+	defer server.Close()
+
+	response, err := http.Post(
+		server.URL+"/api/v1/sources/import",
+		"application/json",
+		strings.NewReader(`{"relativePath":"../outside.jsonl"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("traversal status = %d, want 400", response.StatusCode)
+	}
+
+	response, err = http.Post(
+		server.URL+"/api/v1/sources/import",
+		"application/json",
+		strings.NewReader(`{"relativePath":"service.jsonl"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported struct {
+		Source domain.Source `json:"source"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&imported); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated || imported.Source.SourceType != "server_file" {
+		t.Fatalf("unexpected server import: status=%d source=%+v", response.StatusCode, imported.Source)
+	}
+
+	request, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/sources/"+imported.Source.ID, nil)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d", response.StatusCode)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("server source must remain after metadata deletion: %v", err)
 	}
 }

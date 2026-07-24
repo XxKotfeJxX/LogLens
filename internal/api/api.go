@@ -28,6 +28,8 @@ type Config struct {
 	WebOrigin         string
 	SourceStoragePath string
 	TempStoragePath   string
+	ImportRoot        string
+	AllowServerImport bool
 	MaxUploadSize     int64
 	MaxEntrySize      int
 }
@@ -47,6 +49,7 @@ func New(storage *store.Store, imports *importjob.Manager, config Config) http.H
 	router.Route("/api/v1", func(router chi.Router) {
 		router.Route("/sources", func(router chi.Router) {
 			router.Post("/upload", api.uploadSource)
+			router.Post("/import", api.importServerSource)
 			router.Get("/", api.listSources)
 			router.Get("/{sourceID}", api.getSource)
 			router.Delete("/{sourceID}", api.deleteSource)
@@ -162,7 +165,8 @@ func (api *API) uploadSource(w http.ResponseWriter, r *http.Request) {
 		}
 		source = domain.Source{
 			ID: id, Name: originalName, OriginalName: originalName, StoredPath: targetPath,
-			Format: detection.Format, Status: "uploaded", SizeBytes: written, CreatedAt: time.Now().UTC(),
+			SourceType: "uploaded_file", Format: detection.Format, Status: "uploaded",
+			SizeBytes: written, CreatedAt: time.Now().UTC(),
 		}
 		if err := api.store.CreateSource(r.Context(), source); err != nil {
 			_ = os.Remove(targetPath)
@@ -175,6 +179,51 @@ func (api *API) uploadSource(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		writeError(w, http.StatusBadRequest, "file_required", "Multipart field \"file\" is required")
 	}
+}
+
+func (api *API) importServerSource(w http.ResponseWriter, r *http.Request) {
+	if !api.config.AllowServerImport {
+		writeError(w, http.StatusForbidden, "server_import_disabled", "Server-path imports are disabled")
+		return
+	}
+	var request struct {
+		RelativePath string `json:"relativePath"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "A relativePath JSON field is required")
+		return
+	}
+	path, info, err := resolveServerImport(api.config.ImportRoot, request.RelativePath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_server_path", err.Error())
+		return
+	}
+	if info.Size() == 0 {
+		writeError(w, http.StatusBadRequest, "empty_file", "The selected file is empty")
+		return
+	}
+	if info.Size() > api.config.MaxUploadSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "source_too_large", "The file exceeds the configured source limit")
+		return
+	}
+	detection, err := parser.DetectFile(path, 100)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "detection_failed", "Could not detect the log format")
+		return
+	}
+	name := filepath.Base(path)
+	source := domain.Source{
+		ID: uuid.NewString(), Name: name, OriginalName: name, StoredPath: path,
+		SourceType: "server_file", Format: detection.Format, Status: "uploaded",
+		SizeBytes: info.Size(), CreatedAt: time.Now().UTC(),
+	}
+	if err := api.store.CreateSource(r.Context(), source); err != nil {
+		writeInternal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"source": source, "detection": detection})
 }
 
 func (api *API) listSources(w http.ResponseWriter, r *http.Request) {
@@ -203,15 +252,59 @@ func (api *API) deleteSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "source_busy", "Cancel the active import before deleting this source")
 		return
 	}
-	if err := os.Remove(source.StoredPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusInternalServerError, "file_delete_failed", "The source file could not be deleted; its record was kept")
-		return
+	if source.SourceType == "uploaded_file" {
+		if err := os.Remove(source.StoredPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusInternalServerError, "file_delete_failed", "The source file could not be deleted; its record was kept")
+			return
+		}
 	}
 	if err := api.store.DeleteSourceRecord(r.Context(), source.ID); err != nil {
 		writeInternal(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func resolveServerImport(root, relativePath string) (string, os.FileInfo, error) {
+	relativePath = strings.TrimSpace(relativePath)
+	if relativePath == "" || filepath.IsAbs(relativePath) {
+		return "", nil, fmt.Errorf("relativePath must be a non-empty relative path")
+	}
+	clean := filepath.Clean(relativePath)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("relativePath must stay inside IMPORT_ROOT")
+	}
+	if !allowedExtension(strings.ToLower(filepath.Ext(clean))) {
+		return "", nil, fmt.Errorf("supported extensions: .log, .txt, .jsonl, .ndjson")
+	}
+	rootAbsolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", nil, fmt.Errorf("IMPORT_ROOT is invalid")
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbsolute)
+	if err != nil {
+		return "", nil, fmt.Errorf("IMPORT_ROOT is unavailable")
+	}
+	candidate := filepath.Join(rootResolved, clean)
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		return "", nil, fmt.Errorf("selected file is unavailable")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, fmt.Errorf("symbolic links are not allowed")
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("selected path is not a regular file")
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", nil, fmt.Errorf("selected file is unavailable")
+	}
+	inside, err := filepath.Rel(rootResolved, resolved)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("relativePath must stay inside IMPORT_ROOT")
+	}
+	return resolved, info, nil
 }
 
 func (api *API) detectSource(w http.ResponseWriter, r *http.Request) {

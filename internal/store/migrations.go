@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sources (
     name TEXT NOT NULL,
     original_name TEXT NOT NULL,
     stored_path TEXT NOT NULL UNIQUE,
+    source_type TEXT NOT NULL DEFAULT 'uploaded_file',
     format TEXT NOT NULL,
     status TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,

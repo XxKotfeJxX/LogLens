@@ -16,6 +16,8 @@ type Config struct {
 	SourceStoragePath string
 	TempStoragePath   string
 	ExportStoragePath string
+	ImportRoot        string
+	AllowServerImport bool
 	MaxUploadSize     int64
 	MaxEntrySize      int
 	ImportBatchSize   int
@@ -48,11 +50,21 @@ func LoadConfig() (Config, error) {
 		SourceStoragePath: filepath.Clean(env("SOURCE_STORAGE_PATH", "./storage/sources")),
 		TempStoragePath:   filepath.Clean(env("TEMP_STORAGE_PATH", "./storage/temp")),
 		ExportStoragePath: filepath.Clean(env("EXPORT_STORAGE_PATH", "./storage/exports")),
+		ImportRoot:        filepath.Clean(env("IMPORT_ROOT", ".")),
+		AllowServerImport: envBool("ALLOW_SERVER_IMPORT", false),
 		MaxUploadSize:     maxUpload,
 		MaxEntrySize:      int(maxEntry),
 		ImportBatchSize:   batch,
 		LogLevel:          strings.ToLower(env("LOG_LEVEL", "info")),
 	}, nil
+}
+
+func envBool(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
 }
 
 func (c Config) Address() string {

@@ -74,6 +74,7 @@ When entries are requested, the API:
 ## Supported input
 
 - Extensions: `.log`, `.txt`, `.jsonl`, `.ndjson`
+- Source types: managed browser uploads and root-bound server files
 - JSON aliases:
   - timestamp: `timestamp`, `time`, `ts`, `datetime`, `date`, `@timestamp`
   - level: `level`, `severity`, `log_level`, `logLevel`
@@ -110,6 +111,7 @@ The OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Core endp
 
 ```text
 POST   /api/v1/sources/upload
+POST   /api/v1/sources/import
 GET    /api/v1/sources/
 GET    /api/v1/sources/{id}
 DELETE /api/v1/sources/{id}
@@ -146,6 +148,14 @@ All settings have safe local defaults. See [`.env.example`](.env.example).
 | `MAX_ENTRY_SIZE` | `4MB` | In-memory entry and response preview bound |
 | `IMPORT_BATCH_SIZE` | `2000` | SQLite rows per transaction |
 | `WEB_ORIGIN` | `http://localhost:5173` | Development CORS origin |
+| `IMPORT_ROOT` | empty/disabled | Root directory for server-file imports |
+| `ALLOW_SERVER_IMPORT` | `false` | Enables root-bound relative-path imports |
+
+Server imports accept only a relative path below `IMPORT_ROOT`. Absolute paths,
+traversal, symlinks, non-regular files, unsupported extensions, empty files,
+and files above the configured size limit are rejected. Deleting a
+`server_file` removes its metadata and index but never deletes the original
+file.
 
 ## Generate reproducible samples
 
@@ -196,6 +206,18 @@ Before publishing benchmark numbers, record:
 - **v1.0:** stable self-hosted packaging and migration compatibility
 
 LogLens deliberately is not a replacement for Elasticsearch, Loki, a SIEM, distributed tracing, or a cloud observability platform.
+
+## Git workflow
+
+- `main` contains deployable versions only.
+- `dev` is the integration and default development branch.
+- Feature branches start from `dev` using Conventional Commit prefixes and
+  return through pull requests.
+- Feature pull requests are squash-merged after backend, frontend, integration,
+  and release-readiness checks pass.
+- Releases move from `dev` to `main` through a dedicated release pull request.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete policy.
 
 ## License
 
