@@ -15,6 +15,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   deleteSource,
+  importServerSource,
   listSources,
   startImport,
   uploadSource,
@@ -37,6 +38,8 @@ export function SourceLibrary() {
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploaded, setUploaded] = useState<Uploaded | null>(null);
+  const [importMode, setImportMode] = useState<"upload" | "server">("upload");
+  const [serverPath, setServerPath] = useState("");
   const sources = useQuery({ queryKey: ["sources"], queryFn: listSources });
 
   const upload = useMutation({
@@ -49,6 +52,13 @@ export function SourceLibrary() {
   const begin = useMutation({
     mutationFn: (sourceId: string) => startImport(sourceId),
     onSuccess: (job) => navigate(`/import/${job.id}?sourceId=${job.sourceId}`),
+  });
+  const serverImport = useMutation({
+    mutationFn: importServerSource,
+    onSuccess: (result) => {
+      setUploaded(result);
+      void queryClient.invalidateQueries({ queryKey: ["sources"] });
+    },
   });
   const remove = useMutation({
     mutationFn: deleteSource,
@@ -76,6 +86,7 @@ export function SourceLibrary() {
       setUploaded(null);
       setUploadProgress(0);
       upload.reset();
+      serverImport.reset();
     }
   }
 
@@ -288,48 +299,97 @@ export function SourceLibrary() {
             </div>
             {!uploaded ? (
               <>
-                <div
-                  className={`drop-zone ${dragging ? "is-dragging" : ""}`}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragLeave={() => setDragging(false)}
-                  onDrop={onDrop}
-                >
-                  {upload.isPending ? (
-                    <>
-                      <LoaderCircle className="spin" size={34} />
-                      <h3>Copying source to local storage</h3>
-                      <p>{Math.round(uploadProgress * 100)}% uploaded</p>
-                      <div className="progress-track">
-                        <span style={{ width: `${uploadProgress * 100}%` }} />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <UploadCloud size={36} strokeWidth={1.4} />
-                      <h3>Drop a log file here</h3>
-                      <p>.log · .txt · .jsonl · .ndjson</p>
-                      <button
-                        className="button"
-                        onClick={() => inputRef.current?.click()}
-                      >
-                        Browse files
-                      </button>
-                      <input
-                        ref={inputRef}
-                        type="file"
-                        hidden
-                        accept=".log,.txt,.jsonl,.ndjson"
-                        onChange={(event) => pickFile(event.target.files?.[0])}
-                      />
-                    </>
-                  )}
+                <div className="import-mode-tabs">
+                  <button
+                    className={importMode === "upload" ? "active" : ""}
+                    onClick={() => setImportMode("upload")}
+                  >
+                    Browser upload
+                  </button>
+                  <button
+                    className={importMode === "server" ? "active" : ""}
+                    onClick={() => setImportMode("server")}
+                  >
+                    Server path
+                  </button>
                 </div>
-                {upload.isError ? (
+                {importMode === "upload" ? (
+                  <div
+                    className={`drop-zone ${dragging ? "is-dragging" : ""}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragging(true);
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={onDrop}
+                  >
+                    {upload.isPending ? (
+                      <>
+                        <LoaderCircle className="spin" size={34} />
+                        <h3>Copying source to local storage</h3>
+                        <p>{Math.round(uploadProgress * 100)}% uploaded</p>
+                        <div className="progress-track">
+                          <span style={{ width: `${uploadProgress * 100}%` }} />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloud size={36} strokeWidth={1.4} />
+                        <h3>Drop a log file here</h3>
+                        <p>.log · .txt · .jsonl · .ndjson</p>
+                        <button
+                          className="button"
+                          onClick={() => inputRef.current?.click()}
+                        >
+                          Browse files
+                        </button>
+                        <input
+                          ref={inputRef}
+                          type="file"
+                          hidden
+                          accept=".log,.txt,.jsonl,.ndjson"
+                          onChange={(event) =>
+                            pickFile(event.target.files?.[0])
+                          }
+                        />
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="server-import">
+                    <FolderOpen size={30} />
+                    <div>
+                      <h3>Register an existing server file</h3>
+                      <p>
+                        Enter a relative path below the configured IMPORT_ROOT.
+                        The original file is never deleted.
+                      </p>
+                    </div>
+                    <label className="form-field">
+                      <span>Relative path</span>
+                      <input
+                        value={serverPath}
+                        onChange={(event) => setServerPath(event.target.value)}
+                        placeholder="services/api.jsonl"
+                      />
+                    </label>
+                    <button
+                      className="button button-primary"
+                      disabled={!serverPath.trim() || serverImport.isPending}
+                      onClick={() => serverImport.mutate(serverPath.trim())}
+                    >
+                      {serverImport.isPending ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <ArrowRight size={16} />
+                      )}
+                      Register source
+                    </button>
+                  </div>
+                )}
+                {upload.isError || serverImport.isError ? (
                   <div className="error-state compact">
-                    {upload.error.message}
+                    {upload.error?.message ?? serverImport.error?.message}
                   </div>
                 ) : null}
                 <div className="security-note">
@@ -389,6 +449,7 @@ export function SourceLibrary() {
                     onClick={() => {
                       setUploaded(null);
                       upload.reset();
+                      serverImport.reset();
                     }}
                   >
                     Choose another

@@ -18,6 +18,16 @@ export interface Source {
   entryCount: number;
   parsedCount: number;
   failedCount: number;
+  parserProfileId?: string;
+  parserVersion?: number;
+  extractionStatus:
+    | "not_configured"
+    | "configured"
+    | "indexing"
+    | "ready"
+    | "partial"
+    | "failed";
+  reindexRequired: boolean;
   createdAt: string;
   importedAt?: string;
 }
@@ -34,6 +44,10 @@ export interface LogEntry {
   parseStatus: string;
   raw: string;
   fields?: Record<string, unknown>;
+  eventType?: string;
+  matchedRuleId?: string;
+  parserVersion?: number;
+  warningCount: number;
 }
 
 export interface Detection {
@@ -81,6 +95,97 @@ export interface EntryFilters {
   requestId?: string;
   from?: string;
   to?: string;
+  eventTypes?: string[];
+}
+
+export type FieldType =
+  "string" | "integer" | "float" | "boolean" | "datetime" | "duration";
+
+export interface ParserProfile {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExtractionRule {
+  id: string;
+  parserVersionId: string;
+  name: string;
+  eventType: string;
+  priority: number;
+  matcherType: "regex" | "key_value" | "json" | "literal_pattern";
+  matcherConfig: Record<string, unknown>;
+  enabled: boolean;
+}
+
+export interface FieldDefinition {
+  id: string;
+  parserVersionId: string;
+  name: string;
+  displayName?: string;
+  fieldType: FieldType;
+  indexed: boolean;
+  aggregatable: boolean;
+  nullable: boolean;
+}
+
+export interface ParserProfileVersion {
+  id: string;
+  profileId: string;
+  version: number;
+  recordFormat: string;
+  configuration: Record<string, unknown>;
+  createdAt: string;
+  rules: ExtractionRule[];
+  fields: FieldDefinition[];
+}
+
+export interface PreviewResult {
+  version: number;
+  sampleSize: number;
+  matched: number;
+  unmatched: number;
+  coverage: number;
+  typeErrors: number;
+  items: Array<{
+    number: number;
+    raw: string;
+    eventType?: string;
+    matchedRuleId?: string;
+    fields: Record<string, unknown>;
+    warnings: Array<{ code: string; field?: string; message: string }>;
+  }>;
+}
+
+export interface ReindexJob {
+  id: string;
+  sourceId: string;
+  parserVersionId: string;
+  status:
+    "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  entriesProcessed: number;
+  totalEntries: number;
+  warnings: number;
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+}
+
+export interface ExtractionStatistics {
+  totalEntries: number;
+  matchedEntries: number;
+  unmatchedEntries: number;
+  warningEntries: number;
+  coverage: number;
+  byEventType: Record<string, number>;
+}
+
+export interface FieldStatistics extends FieldDefinition {
+  presentEntries: number;
+  totalEntries: number;
+  coverage: number;
 }
 
 interface APIErrorShape {
@@ -144,6 +249,13 @@ export async function uploadSource(
   });
 }
 
+export function importServerSource(relativePath: string): Promise<{
+  source: Source;
+  detection: Detection;
+}> {
+  return jsonRequest("/sources/import", "POST", { relativePath });
+}
+
 export function startImport(sourceId: string): Promise<ImportJob> {
   return request(`/sources/${sourceId}/imports`, { method: "POST" });
 }
@@ -191,9 +303,120 @@ export function listEntries(
   if (filters.requestId) params.set("requestId", filters.requestId);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
+  if (filters.eventTypes?.length)
+    params.set("eventType", filters.eventTypes.join(","));
   return request(`/sources/${sourceId}/entries?${params}`);
 }
 
 export function importEventsURL(jobId: string): string {
   return `${API_ROOT}/imports/${jobId}/events`;
+}
+
+function jsonRequest<T>(
+  path: string,
+  method: "POST" | "PUT",
+  body: unknown,
+): Promise<T> {
+  return request(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listParserProfiles(): Promise<ParserProfile[]> {
+  const response = await request<{ items: ParserProfile[] }>(
+    "/parser-profiles/",
+  );
+  return response.items;
+}
+
+export function createParserProfile(input: {
+  name: string;
+  description?: string;
+}): Promise<ParserProfile> {
+  return jsonRequest("/parser-profiles/", "POST", input);
+}
+
+export function getParserProfile(id: string): Promise<{
+  profile: ParserProfile;
+  versions: ParserProfileVersion[];
+}> {
+  return request(`/parser-profiles/${id}`);
+}
+
+export function createParserVersion(
+  profileId: string,
+  input: {
+    recordFormat: string;
+    configuration?: Record<string, unknown>;
+    rules: Array<{
+      name: string;
+      eventType: string;
+      priority: number;
+      matcherType: string;
+      matcherConfig: Record<string, unknown>;
+      enabled: boolean;
+    }>;
+    fields: Array<{
+      name: string;
+      displayName?: string;
+      fieldType: FieldType;
+      indexed: boolean;
+      aggregatable: boolean;
+      nullable: boolean;
+    }>;
+  },
+): Promise<ParserProfileVersion> {
+  return jsonRequest(`/parser-profiles/${profileId}/versions`, "POST", input);
+}
+
+export function previewParserProfile(
+  profileId: string,
+  sourceId: string,
+  version?: number,
+): Promise<PreviewResult> {
+  return jsonRequest(`/parser-profiles/${profileId}/preview`, "POST", {
+    sourceId,
+    version,
+    limit: 500,
+  });
+}
+
+export function assignSourceParser(
+  sourceId: string,
+  profileId: string,
+  version: number,
+): Promise<Source> {
+  return jsonRequest(`/sources/${sourceId}/parser`, "PUT", {
+    profileId,
+    version,
+  });
+}
+
+export function startReindex(sourceId: string): Promise<ReindexJob> {
+  return request(`/sources/${sourceId}/reindex`, { method: "POST" });
+}
+
+export function getReindex(sourceId: string): Promise<ReindexJob> {
+  return request(`/sources/${sourceId}/reindex`);
+}
+
+export function cancelReindex(sourceId: string): Promise<void> {
+  return request(`/sources/${sourceId}/reindex/cancel`, { method: "POST" });
+}
+
+export async function getSourceFields(
+  sourceId: string,
+): Promise<FieldStatistics[]> {
+  const response = await request<{ items: FieldStatistics[] }>(
+    `/sources/${sourceId}/fields`,
+  );
+  return response.items;
+}
+
+export function getExtractionStatistics(
+  sourceId: string,
+): Promise<ExtractionStatistics> {
+  return request(`/sources/${sourceId}/extraction-statistics`);
 }

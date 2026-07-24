@@ -3,6 +3,9 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { SourceLibrary } from "./pages/SourceLibrary";
 import { ImportProgress } from "./pages/ImportProgress";
+import { Parsers } from "./pages/Parsers";
+import { ParserStudio } from "./pages/ParserStudio";
+import { SourceExtraction } from "./pages/SourceExtraction";
 
 const Explorer = lazy(() =>
   import("./pages/Explorer").then((module) => ({ default: module.Explorer })),
@@ -13,7 +16,13 @@ export function App() {
     <AppShell>
       <Routes>
         <Route path="/" element={<SourceLibrary />} />
+        <Route path="/parsers" element={<Parsers />} />
+        <Route path="/parsers/:profileId" element={<ParserStudio />} />
         <Route path="/import/:jobId" element={<ImportProgress />} />
+        <Route
+          path="/sources/:sourceId/extraction"
+          element={<SourceExtraction />}
+        />
         <Route
           path="/sources/:sourceId"
           element={
