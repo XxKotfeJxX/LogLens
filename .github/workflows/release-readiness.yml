@@ -21,7 +21,7 @@ jobs:
   readiness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Render Compose configuration
         run: docker compose config --quiet
       - name: Build production images
