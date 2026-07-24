@@ -14,9 +14,9 @@ Current product history is preserved:
 - v0.2 Search and Investigation
 - v0.3 Live Tail
 - v0.4 Extraction Studio
+- v0.5 Structured Analysis
 
-v0.5 Structured Analysis and v0.6 Multi-Source Correlation extend this
-foundation.
+v0.6 Multi-Source Correlation extends this foundation.
 
 ## Processing pipeline
 
@@ -65,6 +65,15 @@ open existing source
     → filter event_type=attack
     → inspect typed damage
 ```
+
+## v0.5 Structured Analysis
+
+- POST-based typed queries with equality, range, set, and substring operators.
+- `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX` over one optional group-by field.
+- Safe derived expressions with arithmetic, case conversion, numeric
+  conversion, and timestamp-duration functions.
+- Saved analysis configurations with table, bar, and line visualizations.
+- Non-indexed fields remain visible in JSON but are rejected as filter fields.
 
 ## Quick start
 
@@ -160,22 +169,36 @@ POST   /api/v1/sources/{id}/watch/stop
 GET    /api/v1/sources/{id}/live/events
 ```
 
+Structured Analysis:
+
+```text
+POST   /api/v1/sources/{id}/query
+POST   /api/v1/sources/{id}/aggregations
+POST   /api/v1/sources/{id}/analyses
+GET    /api/v1/sources/{id}/analyses
+DELETE /api/v1/sources/{id}/analyses/{analysisId}
+
+POST   /api/v1/parser-profiles/{id}/derived-fields
+GET    /api/v1/parser-profiles/{id}/derived-fields
+DELETE /api/v1/parser-profiles/{id}/derived-fields/{fieldId}
+```
+
 Existing endpoints remain backward compatible. `GET /entries` supports the
 original filters plus `eventType`; v0.5 adds a separate typed POST query.
 
 ## Configuration
 
-| Setting | Default | Purpose |
-|---|---:|---|
-| `DATABASE_PATH` | `./storage/loglens.db` | SQLite metadata |
-| `SOURCE_STORAGE_PATH` | `./storage/sources` | Managed raw files |
-| `TEMP_STORAGE_PATH` | `./storage/temp` | In-progress uploads |
-| `MAX_UPLOAD_SIZE` | `20GB` | Request and source limit |
-| `MAX_ENTRY_SIZE` | `4MB` | Per-entry memory bound |
-| `IMPORT_BATCH_SIZE` | `2000` | Import transaction size |
-| `IMPORT_ROOT` | `.` | Allowed server-import root |
-| `ALLOW_SERVER_IMPORT` | `false` | Enables server-path registration |
-| `WEB_ORIGIN` | `http://localhost:5173` | Development CORS origin |
+| Setting               |                 Default | Purpose                          |
+| --------------------- | ----------------------: | -------------------------------- |
+| `DATABASE_PATH`       |  `./storage/loglens.db` | SQLite metadata                  |
+| `SOURCE_STORAGE_PATH` |     `./storage/sources` | Managed raw files                |
+| `TEMP_STORAGE_PATH`   |        `./storage/temp` | In-progress uploads              |
+| `MAX_UPLOAD_SIZE`     |                  `20GB` | Request and source limit         |
+| `MAX_ENTRY_SIZE`      |                   `4MB` | Per-entry memory bound           |
+| `IMPORT_BATCH_SIZE`   |                  `2000` | Import transaction size          |
+| `IMPORT_ROOT`         |                     `.` | Allowed server-import root       |
+| `ALLOW_SERVER_IMPORT` |                 `false` | Enables server-path registration |
+| `WEB_ORIGIN`          | `http://localhost:5173` | Development CORS origin          |
 
 ## Verification
 
@@ -195,13 +218,12 @@ docker compose build
 ```
 
 Integration tests use real SQLite and cover legacy migration, immutable parser
-versions, preview isolation, typed extraction, offset-preserving reindex, and
-semantic extraction of appended live entries.
+versions, preview isolation, typed extraction, offset-preserving reindex,
+semantic live entries, typed queries, aggregations, derived fields, and saved
+analyses.
 
 ## Roadmap
 
-- v0.5 Structured Analysis: typed filters, aggregations, safe derived fields,
-  saved analyses, and charts.
 - v0.6 Multi-Source Correlation: source groups, canonical field mappings,
   corrected merged timelines, cross-source search, and arbitrary correlation
   keys.

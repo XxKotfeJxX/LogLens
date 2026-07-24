@@ -244,6 +244,7 @@ func TestExtractionPreviewReindexAndLiveTail(t *testing.T) {
 			{"name": "target", "fieldType": "string", "indexed": true, "nullable": false},
 			{"name": "weapon", "fieldType": "string", "indexed": true, "aggregatable": true, "nullable": false},
 			{"name": "damage", "fieldType": "integer", "indexed": true, "aggregatable": true, "nullable": false},
+			{"name": "note", "fieldType": "string", "indexed": false, "aggregatable": false, "nullable": true},
 		},
 	}, http.StatusCreated, &version)
 	if version.Version != 1 {
@@ -316,6 +317,65 @@ func TestExtractionPreviewReindexAndLiveTail(t *testing.T) {
 	if attacks.Items[1].ParserVersion == nil || *attacks.Items[1].ParserVersion != 1 {
 		t.Fatalf("live entry did not keep parser v1: %+v", attacks.Items[1])
 	}
+	var typedQuery struct {
+		Items []domain.Entry `json:"items"`
+		Count int            `json:"count"`
+	}
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/query", map[string]any{
+		"filters": []map[string]any{{"field": "damage", "operator": "gt", "value": 40}},
+		"sort":    []map[string]any{{"field": "entry_number", "direction": "desc"}},
+		"limit":   10,
+	}, http.StatusOK, &typedQuery)
+	if typedQuery.Count != 2 || typedQuery.Items[0].Number <= typedQuery.Items[1].Number {
+		t.Fatalf("unexpected typed query result: %+v", typedQuery)
+	}
+
+	var grouped domain.AggregationResult
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/aggregations", map[string]any{
+		"operation": "sum", "field": "damage", "groupBy": "weapon", "filters": []any{},
+	}, http.StatusOK, &grouped)
+	if len(grouped.Buckets) != 2 {
+		t.Fatalf("unexpected grouped aggregation: %+v", grouped)
+	}
+
+	var derived domain.DerivedFieldDefinition
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/parser-profiles/"+profile.ID+"/derived-fields", map[string]any{
+		"name": "half_damage", "resultType": "float", "expression": "damage / 2",
+	}, http.StatusCreated, &derived)
+	typedQuery.Items = nil
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/query", map[string]any{
+		"filters": []map[string]any{{"field": "half_damage", "operator": "gt", "value": 40}},
+		"limit":   10,
+	}, http.StatusOK, &typedQuery)
+	if typedQuery.Count != 1 || typedQuery.Items[0].Fields["half_damage"].(float64) != 49.5 {
+		t.Fatalf("unexpected derived query: %+v", typedQuery)
+	}
+	var derivedTotal domain.AggregationResult
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/aggregations", map[string]any{
+		"operation": "sum", "field": "half_damage", "filters": []any{},
+	}, http.StatusOK, &derivedTotal)
+	if len(derivedTotal.Buckets) != 1 || derivedTotal.Buckets[0].Value != 70.5 {
+		t.Fatalf("unexpected derived aggregation: %+v", derivedTotal)
+	}
+
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/query", map[string]any{
+		"filters": []map[string]any{{"field": "note", "operator": "eq", "value": "x"}},
+	}, http.StatusBadRequest, nil)
+
+	var saved domain.SavedAnalysis
+	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/analyses", map[string]any{
+		"name": "Damage by weapon", "chartType": "bar",
+		"configuration": map[string]any{"operation": "sum", "field": "damage", "groupBy": "weapon"},
+	}, http.StatusCreated, &saved)
+	var savedList struct {
+		Items []domain.SavedAnalysis `json:"items"`
+	}
+	doJSON(t, http.MethodGet, server.URL+"/api/v1/sources/"+source.ID+"/analyses", nil, http.StatusOK, &savedList)
+	if len(savedList.Items) != 1 || savedList.Items[0].Configuration["field"] != "damage" {
+		t.Fatalf("unexpected saved analyses: %+v", savedList.Items)
+	}
+	doJSON(t, http.MethodDelete, server.URL+"/api/v1/sources/"+source.ID+"/analyses/"+saved.ID, nil, http.StatusNoContent, nil)
+	doJSON(t, http.MethodDelete, server.URL+"/api/v1/parser-profiles/"+profile.ID+"/derived-fields/"+derived.ID, nil, http.StatusNoContent, nil)
 	doJSON(t, http.MethodPost, server.URL+"/api/v1/sources/"+source.ID+"/watch/stop", nil, http.StatusAccepted, nil)
 }
 

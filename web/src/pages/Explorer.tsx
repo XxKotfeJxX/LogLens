@@ -193,6 +193,13 @@ export function Explorer() {
             >
               <Settings2 size={16} />
             </Link>
+            <Link
+              to={`/sources/${sourceId}/analyze`}
+              className="button"
+              title="Structured analysis"
+            >
+              Analyze
+            </Link>
           </div>
         </div>
 

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: LogLens API
-  version: 0.4.0
-  description: Streaming large-log exploration with versioned structured-event extraction.
+  version: 0.5.0
+  description: Streaming large-log exploration, versioned extraction, and typed analysis.
 servers:
   - url: http://localhost:8080
 paths:
@@ -541,6 +541,110 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /api/v1/sources/{sourceId}/query:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: querySource
+      summary: Query base and extracted fields with typed operators
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StructuredQuery"
+      responses:
+        "200":
+          description: Bounded matching entry window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Entry"
+                  count:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/sources/{sourceId}/aggregations:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    post:
+      operationId: aggregateSource
+      summary: Aggregate a typed field with one optional group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AggregationRequest"
+      responses:
+        "200":
+          description: Aggregation buckets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AggregationResult"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/sources/{sourceId}/analyses:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      operationId: listSavedAnalyses
+      responses:
+        "200":
+          description: Saved analysis configurations
+    post:
+      operationId: createSavedAnalysis
+      responses:
+        "201":
+          description: Analysis saved
+  /api/v1/sources/{sourceId}/analyses/{analysisId}:
+    parameters:
+      - $ref: "#/components/parameters/SourceId"
+      - name: analysisId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteSavedAnalysis
+      responses:
+        "204":
+          description: Analysis deleted
+  /api/v1/parser-profiles/{profileId}/derived-fields:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    get:
+      operationId: listDerivedFields
+      responses:
+        "200":
+          description: Derived fields
+    post:
+      operationId: createDerivedField
+      responses:
+        "201":
+          description: Derived field created
+  /api/v1/parser-profiles/{profileId}/derived-fields/{fieldId}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+      - name: fieldId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteDerivedField
+      responses:
+        "204":
+          description: Derived field deleted
 components:
   parameters:
     SourceId:
@@ -587,7 +691,25 @@ components:
           type: string
     Source:
       type: object
-      required: [id, name, originalName, sourceType, format, status, sizeBytes, entryCount, parsedCount, failedCount, extractionStatus, reindexRequired, watchStatus, watchOffset, rotationGeneration, createdAt]
+      required:
+        [
+          id,
+          name,
+          originalName,
+          sourceType,
+          format,
+          status,
+          sizeBytes,
+          entryCount,
+          parsedCount,
+          failedCount,
+          extractionStatus,
+          reindexRequired,
+          watchStatus,
+          watchOffset,
+          rotationGeneration,
+          createdAt,
+        ]
       properties:
         id:
           type: string
@@ -604,7 +726,16 @@ components:
           enum: [jsonl, plain_text]
         status:
           type: string
-          enum: [uploaded, queued, importing, ready, partially_parsed, failed, cancelled]
+          enum:
+            [
+              uploaded,
+              queued,
+              importing,
+              ready,
+              partially_parsed,
+              failed,
+              cancelled,
+            ]
         sizeBytes:
           type: integer
         entryCount:
@@ -640,7 +771,16 @@ components:
           format: date-time
     ImportJob:
       type: object
-      required: [id, sourceId, status, bytesProcessed, totalBytes, entriesFound, parseFailures]
+      required:
+        [
+          id,
+          sourceId,
+          status,
+          bytesProcessed,
+          totalBytes,
+          entriesFound,
+          parseFailures,
+        ]
       properties:
         id:
           type: string
@@ -690,7 +830,8 @@ components:
             $ref: "#/components/schemas/Entry"
     Entry:
       type: object
-      required: [number, byteOffset, byteLength, level, message, parseStatus, raw]
+      required:
+        [number, byteOffset, byteLength, level, message, parseStatus, raw]
       properties:
         number:
           type: integer
@@ -744,7 +885,8 @@ components:
               type: boolean
     Statistics:
       type: object
-      required: [totalEntries, parsedEntries, malformedEntries, byLevel, byService]
+      required:
+        [totalEntries, parsedEntries, malformedEntries, byLevel, byService]
       properties:
         totalEntries:
           type: integer
@@ -815,7 +957,8 @@ components:
           type: boolean
     ExtractionRule:
       type: object
-      required: [id, name, eventType, priority, matcherType, matcherConfig, enabled]
+      required:
+        [id, name, eventType, priority, matcherType, matcherConfig, enabled]
       properties:
         id:
           type: string
@@ -835,7 +978,17 @@ components:
           type: boolean
     ParserProfileVersion:
       type: object
-      required: [id, profileId, version, recordFormat, configuration, createdAt, rules, fields]
+      required:
+        [
+          id,
+          profileId,
+          version,
+          recordFormat,
+          configuration,
+          createdAt,
+          rules,
+          fields,
+        ]
       properties:
         id:
           type: string
@@ -881,7 +1034,16 @@ components:
             $ref: "#/components/schemas/FieldDefinition"
     ReindexJob:
       type: object
-      required: [id, sourceId, parserVersionId, status, entriesProcessed, totalEntries, warnings]
+      required:
+        [
+          id,
+          sourceId,
+          parserVersionId,
+          status,
+          entriesProcessed,
+          totalEntries,
+          warnings,
+        ]
       properties:
         id:
           type: string
@@ -908,7 +1070,15 @@ components:
           type: string
     ExtractionStatistics:
       type: object
-      required: [totalEntries, matchedEntries, unmatchedEntries, warningEntries, coverage, byEventType]
+      required:
+        [
+          totalEntries,
+          matchedEntries,
+          unmatchedEntries,
+          warningEntries,
+          coverage,
+          byEventType,
+        ]
       properties:
         totalEntries:
           type: integer
@@ -926,6 +1096,75 @@ components:
           type: object
           additionalProperties:
             type: integer
+    TypedFilter:
+      type: object
+      required: [field, operator, value]
+      properties:
+        field:
+          type: string
+        operator:
+          type: string
+          enum: [eq, ne, gt, gte, lt, lte, in, between, contains]
+        value: {}
+    StructuredQuery:
+      type: object
+      required: [filters]
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypedFilter"
+        sort:
+          type: array
+          maxItems: 1
+          items:
+            type: object
+            required: [field, direction]
+            properties:
+              field:
+                type: string
+                enum: [timestamp, entry_number]
+              direction:
+                type: string
+                enum: [asc, desc]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    AggregationRequest:
+      type: object
+      required: [operation, filters]
+      properties:
+        operation:
+          type: string
+          enum: [count, sum, avg, min, max]
+        field:
+          type: string
+        groupBy:
+          type: string
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypedFilter"
+    AggregationResult:
+      type: object
+      required: [operation, buckets]
+      properties:
+        operation:
+          type: string
+        field:
+          type: string
+        groupBy:
+          type: string
+        buckets:
+          type: array
+          items:
+            type: object
+            required: [value]
+            properties:
+              group: {}
+              value:
+                type: number
     Error:
       type: object
       required: [error]

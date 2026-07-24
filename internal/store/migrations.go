@@ -157,6 +157,32 @@ CREATE TABLE IF NOT EXISTS reindex_jobs (
 );
 `
 
+const analysisSchema = `
+CREATE TABLE IF NOT EXISTS derived_field_definitions (
+    id TEXT PRIMARY KEY,
+    parser_profile_id TEXT NOT NULL REFERENCES parser_profiles(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    result_type TEXT NOT NULL,
+    expression TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(parser_profile_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS saved_analyses (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+    source_group_id TEXT,
+    configuration_json TEXT NOT NULL,
+    chart_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_analyses_source
+ON saved_analyses(source_id, updated_at);
+`
+
 func migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return err
@@ -187,6 +213,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	if _, err := db.ExecContext(ctx, extractionSchema); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, analysisSchema); err != nil {
 		return err
 	}
 	return nil
