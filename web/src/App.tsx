@@ -13,6 +13,16 @@ const Explorer = lazy(() =>
 const Analyze = lazy(() =>
   import("./pages/Analyze").then((module) => ({ default: module.Analyze })),
 );
+const SourceGroups = lazy(() =>
+  import("./pages/SourceGroups").then((module) => ({
+    default: module.SourceGroups,
+  })),
+);
+const SourceGroupDetail = lazy(() =>
+  import("./pages/SourceGroups").then((module) => ({
+    default: module.SourceGroupDetail,
+  })),
+);
 
 export function App() {
   return (
@@ -22,6 +32,32 @@ export function App() {
         <Route path="/parsers" element={<Parsers />} />
         <Route path="/parsers/:profileId" element={<ParserStudio />} />
         <Route path="/import/:jobId" element={<ImportProgress />} />
+        <Route
+          path="/groups"
+          element={
+            <Suspense
+              fallback={
+                <div className="page loading-page">Opening source groups…</div>
+              }
+            >
+              <SourceGroups />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/groups/:groupId"
+          element={
+            <Suspense
+              fallback={
+                <div className="page loading-page">
+                  Opening merged evidence…
+                </div>
+              }
+            >
+              <SourceGroupDetail />
+            </Suspense>
+          }
+        />
         <Route
           path="/sources/:sourceId/extraction"
           element={<SourceExtraction />}

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Braces, Github, ScanLine } from "lucide-react";
+import { Activity, Braces, GitMerge, Github, ScanLine } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -16,6 +16,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link to="/">Sources</Link>
           <Link to="/parsers">
             <Braces size={14} /> Parsers
+          </Link>
+          <Link to="/groups">
+            <GitMerge size={14} /> Groups
           </Link>
         </nav>
         <div className="header-meta">
