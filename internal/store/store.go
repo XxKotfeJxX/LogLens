@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,13 +32,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(4)
-	if _, err := db.ExecContext(ctx, schema); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
-	}
-	if err := ensureSourceTypeColumn(ctx, db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate source type: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -49,12 +46,17 @@ func (s *Store) Ready(ctx context.Context) error {
 }
 
 func (s *Store) CreateSource(ctx context.Context, source domain.Source) error {
+	if source.ExtractionStatus == "" {
+		source.ExtractionStatus = "not_configured"
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sources (
-			id, name, original_name, stored_path, source_type, format, status, size_bytes, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, name, original_name, stored_path, source_type, format, status, size_bytes,
+			extraction_status, watch_status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		source.ID, source.Name, source.OriginalName, source.StoredPath,
-		source.SourceType, source.Format, source.Status, source.SizeBytes, source.CreatedAt.Format(time.RFC3339Nano),
+		source.SourceType, source.Format, source.Status, source.SizeBytes,
+		source.ExtractionStatus, "stopped", source.CreatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -62,7 +64,9 @@ func (s *Store) CreateSource(ctx context.Context, source domain.Source) error {
 func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, original_name, stored_path, source_type, format, status, size_bytes,
-		       entry_count, parsed_count, failed_count, created_at, imported_at
+		       entry_count, parsed_count, failed_count, parser_profile_id, parser_version,
+		       extraction_status, reindex_required, watch_status, watch_offset,
+		       COALESCE(file_identity, ''), rotation_generation, created_at, imported_at
 		FROM sources WHERE status <> 'deleted' ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -83,7 +87,9 @@ func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
 func (s *Store) GetSource(ctx context.Context, id string) (domain.Source, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, original_name, stored_path, source_type, format, status, size_bytes,
-		       entry_count, parsed_count, failed_count, created_at, imported_at
+		       entry_count, parsed_count, failed_count, parser_profile_id, parser_version,
+		       extraction_status, reindex_required, watch_status, watch_offset,
+		       COALESCE(file_identity, ''), rotation_generation, created_at, imported_at
 		FROM sources WHERE id = ? AND status <> 'deleted'`, id)
 	source, err := scanSource(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -228,28 +234,71 @@ func (s *Store) InsertEntries(ctx context.Context, entries []domain.IndexedEntry
 		return err
 	}
 	defer tx.Rollback()
+	if err := insertEntriesTx(ctx, tx, entries); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertEntriesTx(ctx context.Context, tx *sql.Tx, entries []domain.IndexedEntry) error {
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO entries (
 			source_id, entry_number, byte_offset, byte_length, timestamp_ns,
-			level, service, request_id, parse_status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			level, service, request_id, parse_status, event_type, matched_rule_id,
+			custom_fields_json, parser_version, warning_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
+	fieldStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO entry_field_values
+		    (entry_id, field_definition_id, value_text, value_integer, value_real,
+		     value_boolean, value_timestamp_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer fieldStmt.Close()
 
 	for _, entry := range entries {
 		var timestamp any
 		if entry.Timestamp != nil {
 			timestamp = entry.Timestamp.UnixNano()
 		}
-		if _, err := stmt.ExecContext(ctx, entry.SourceID, entry.Number, entry.ByteOffset,
+		var fieldsJSON any
+		if len(entry.CustomFields) > 0 {
+			encoded, err := json.Marshal(entry.CustomFields)
+			if err != nil {
+				return err
+			}
+			fieldsJSON = string(encoded)
+		}
+		var parserVersion any
+		if entry.ParserVersion != nil {
+			parserVersion = *entry.ParserVersion
+		}
+		result, err := stmt.ExecContext(ctx, entry.SourceID, entry.Number, entry.ByteOffset,
 			entry.ByteLength, timestamp, nullable(entry.Level), nullable(entry.Service),
-			nullable(entry.RequestID), entry.ParseStatus); err != nil {
+			nullable(entry.RequestID), entry.ParseStatus, nullable(entry.EventType),
+			nullable(entry.MatchedRuleID), fieldsJSON, parserVersion,
+			entry.WarningCount)
+		if err != nil {
 			return err
 		}
+		entryID, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		for fieldID, value := range entry.IndexedValues {
+			textValue, integerValue, realValue, booleanValue, timestampValue := fieldColumns(value)
+			if _, err := fieldStmt.ExecContext(ctx, entryID, fieldID, textValue,
+				integerValue, realValue, booleanValue, timestampValue); err != nil {
+				return err
+			}
+		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) QueryEntryMetadata(ctx context.Context, sourceID string, filter domain.EntryFilter) ([]domain.IndexedEntry, bool, error) {
@@ -273,6 +322,7 @@ func (s *Store) QueryEntryMetadata(ctx context.Context, sourceID string, filter 
 	addInFilter("level", filter.Levels)
 	addInFilter("service", filter.Services)
 	addInFilter("parse_status", filter.ParseStatus)
+	addInFilter("event_type", filter.EventTypes)
 	if filter.RequestID != "" {
 		where = append(where, "request_id = ?")
 		args = append(args, filter.RequestID)
@@ -287,9 +337,10 @@ func (s *Store) QueryEntryMetadata(ctx context.Context, sourceID string, filter 
 	}
 	args = append(args, limit+1)
 	query := `
-		SELECT source_id, entry_number, byte_offset, byte_length, timestamp_ns,
+		SELECT id, source_id, entry_number, byte_offset, byte_length, timestamp_ns,
 		       COALESCE(level, ''), COALESCE(service, ''), COALESCE(request_id, ''),
-		       parse_status
+		       parse_status, COALESCE(event_type, ''), COALESCE(matched_rule_id, ''),
+		       COALESCE(custom_fields_json, '{}'), parser_version, warning_count
 		FROM entries WHERE ` + strings.Join(where, " AND ") +
 		` ORDER BY entry_number LIMIT ?`
 
@@ -302,10 +353,20 @@ func (s *Store) QueryEntryMetadata(ctx context.Context, sourceID string, filter 
 	for rows.Next() {
 		var entry domain.IndexedEntry
 		var timestamp sql.NullInt64
-		if err := rows.Scan(&entry.SourceID, &entry.Number, &entry.ByteOffset,
+		var fieldsJSON string
+		var parserVersion sql.NullInt64
+		if err := rows.Scan(&entry.ID, &entry.SourceID, &entry.Number, &entry.ByteOffset,
 			&entry.ByteLength, &timestamp, &entry.Level, &entry.Service,
-			&entry.RequestID, &entry.ParseStatus); err != nil {
+			&entry.RequestID, &entry.ParseStatus, &entry.EventType, &entry.MatchedRuleID,
+			&fieldsJSON, &parserVersion, &entry.WarningCount); err != nil {
 			return nil, false, err
+		}
+		if err := decodeFields(fieldsJSON, &entry.CustomFields); err != nil {
+			return nil, false, err
+		}
+		if parserVersion.Valid {
+			value := int(parserVersion.Int64)
+			entry.ParserVersion = &value
 		}
 		if timestamp.Valid {
 			value := time.Unix(0, timestamp.Int64).UTC()
@@ -322,20 +383,31 @@ func (s *Store) QueryEntryMetadata(ctx context.Context, sourceID string, filter 
 
 func (s *Store) GetEntryMetadata(ctx context.Context, sourceID string, number int64) (domain.IndexedEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT source_id, entry_number, byte_offset, byte_length, timestamp_ns,
+		SELECT id, source_id, entry_number, byte_offset, byte_length, timestamp_ns,
 		       COALESCE(level, ''), COALESCE(service, ''), COALESCE(request_id, ''),
-		       parse_status
+		       parse_status, COALESCE(event_type, ''), COALESCE(matched_rule_id, ''),
+		       COALESCE(custom_fields_json, '{}'), parser_version, warning_count
 		FROM entries WHERE source_id = ? AND entry_number = ?`, sourceID, number)
 	var entry domain.IndexedEntry
 	var timestamp sql.NullInt64
-	err := row.Scan(&entry.SourceID, &entry.Number, &entry.ByteOffset, &entry.ByteLength,
-		&timestamp, &entry.Level, &entry.Service, &entry.RequestID, &entry.ParseStatus)
+	var fieldsJSON string
+	var parserVersion sql.NullInt64
+	err := row.Scan(&entry.ID, &entry.SourceID, &entry.Number, &entry.ByteOffset, &entry.ByteLength,
+		&timestamp, &entry.Level, &entry.Service, &entry.RequestID, &entry.ParseStatus,
+		&entry.EventType, &entry.MatchedRuleID, &fieldsJSON, &parserVersion, &entry.WarningCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.IndexedEntry{}, ErrNotFound
 	}
 	if timestamp.Valid {
 		value := time.Unix(0, timestamp.Int64).UTC()
 		entry.Timestamp = &value
+	}
+	if err == nil {
+		err = decodeFields(fieldsJSON, &entry.CustomFields)
+	}
+	if parserVersion.Valid {
+		value := int(parserVersion.Int64)
+		entry.ParserVersion = &value
 	}
 	return entry, err
 }
@@ -440,9 +512,14 @@ func scanSource(scanner interface{ Scan(...any) error }) (domain.Source, error) 
 	var source domain.Source
 	var created string
 	var imported sql.NullString
+	var profileID sql.NullString
+	var parserVersion sql.NullInt64
+	var reindexRequired int
 	err := scanner.Scan(&source.ID, &source.Name, &source.OriginalName, &source.StoredPath,
 		&source.SourceType, &source.Format, &source.Status, &source.SizeBytes, &source.EntryCount,
-		&source.ParsedCount, &source.FailedCount, &created, &imported)
+		&source.ParsedCount, &source.FailedCount, &profileID, &parserVersion,
+		&source.ExtractionStatus, &reindexRequired, &source.WatchStatus, &source.WatchOffset,
+		&source.FileIdentity, &source.RotationGeneration, &created, &imported)
 	if err != nil {
 		return domain.Source{}, err
 	}
@@ -451,41 +528,15 @@ func scanSource(scanner interface{ Scan(...any) error }) (domain.Source, error) 
 		return domain.Source{}, err
 	}
 	source.ImportedAt = parseNullableTime(imported)
+	if profileID.Valid {
+		source.ParserProfileID = &profileID.String
+	}
+	if parserVersion.Valid {
+		value := int(parserVersion.Int64)
+		source.ParserVersion = &value
+	}
+	source.ReindexRequired = reindexRequired != 0
 	return source, nil
-}
-
-func ensureSourceTypeColumn(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(sources)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, columnType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		if name == "source_type" {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if found {
-		return nil
-	}
-	_, err = db.ExecContext(ctx, `
-		ALTER TABLE sources
-		ADD COLUMN source_type TEXT NOT NULL DEFAULT 'uploaded_file'`)
-	return err
 }
 
 func parseNullableTime(value sql.NullString) *time.Time {
@@ -504,6 +555,14 @@ func nullable(value string) any {
 		return nil
 	}
 	return value
+}
+
+func decodeFields(raw string, target *map[string]any) error {
+	if raw == "" || raw == "{}" {
+		*target = nil
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), target)
 }
 
 func requireChanged(result sql.Result) error {
